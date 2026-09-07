@@ -600,6 +600,12 @@ jobs:
           chmod +x opengrep
           curl -sSfL -o rules.tar.gz \
             "https://github.com/opengrep/opengrep-rules/archive/${OPENGREP_RULES_SHA}.tar.gz"
+          # The rules land inside the workspace because the rule ids Opengrep emits carry
+          # the --config path, and the enrich step trims them by that root. They must
+          # therefore be excluded from the scan below: the rulebook is full of
+          # deliberately vulnerable example snippets, and scanning it turns every example
+          # into a finding. On the first real run that was 5118 of 6766 results — 75%
+          # noise, all of it the scanner reporting on its own rulebook.
           mkdir -p ogrules && tar xzf rules.tar.gz -C ogrules --strip-components=1
       # Scan "." from the repo root so the file paths in the SARIF stay relative and the
       # source links in TDxGuard resolve. Opengrep then prefixes each rule id with the
@@ -610,7 +616,8 @@ jobs:
             --config ogrules/python --config ogrules/javascript --config ogrules/typescript \
             --config ogrules/go --config ogrules/generic \
             --exclude=node_modules --exclude=.venv --exclude=vendor \
-            --exclude=dist --exclude=build . || true
+            --exclude=dist --exclude=build \
+            --exclude=ogrules . || true
       # SecObserve uses the rule id as the finding title, and Opengrep's id carries the
       # --config path ("ogrules.python.<rule>"). --rule-roots trims it to "python.<rule>".
       # (Opengrep already embeds region.snippet, so this only rewrites the ids.)
