@@ -101,6 +101,7 @@ permissions:
   id-token: write          # required: lets the CI mint the OIDC token it trades for an OpenBao one
   security-events: write   # SARIF -> the pull request's Files changed tab and the Security tab
   pull-requests: write     # the summary comment on the pull request
+  actions: read            # upload-sarif needs it to read the run on a PRIVATE repository
 
 jobs:
   # The two helper scripts used to be pulled from raw.githubusercontent at run time.
@@ -531,8 +532,11 @@ jobs:
       # little while surfacing where the secret sits.
       - name: Scan for committed secrets (new commits only)
         run: |
+          # An `if`, not `[ -f x ] && ...`: the && form returns 1 when the file is
+          # absent, and the step runs under `bash -e`. Most repositories have no
+          # .gitleaks.toml, so the && form failed the job for nearly everyone.
           CFG=""
-          [ -f .gitleaks.toml ] && CFG="-c /repo/.gitleaks.toml"
+          if [ -f .gitleaks.toml ]; then CFG="-c /repo/.gitleaks.toml"; fi
           docker run --rm -v "$PWD:/repo" ghcr.io/betterleaks/betterleaks:v1.8.1 \
             git /repo \
             --log-opts="${{ steps.range.outputs.value }}" \
@@ -643,6 +647,12 @@ jobs:
             --skip-dirs node_modules --skip-dirs .venv --skip-dirs vendor
       # Trivy 0.58.x renders its SARIF through html/template, so quotes arrive escaped
       # ("&#39;apt-get&#39;...") and no snippet is included. Normalize before uploading.
+      # Trivy runs as root inside its container, so the files it writes are root-owned
+      # and the enrich step below, running as the runner user, gets EACCES trying to
+      # rewrite them in place.
+      - name: Take ownership of Trivy's output
+        run: sudo chown "$(id -u):$(id -g)" trivy.sarif sbom.cdx.json 2>/dev/null || true
+
       - name: Normalize the SARIF (unescape HTML, embed snippets)
         run: |
           python3 sarif-enrich.py trivy.sarif . --unescape-html
