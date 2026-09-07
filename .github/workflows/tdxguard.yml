@@ -488,7 +488,7 @@ jobs:
               sys.exit(main())
           TDXGUARD_SCRIPT_EOF
           python3 -m py_compile sarif-enrich.py zen-collector.py
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: tdxguard-tools
           path: "*.py"
@@ -497,7 +497,7 @@ jobs:
   betterleaks:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with: { fetch-depth: 0 }
 
       # IMPORTANT: scan only the NEW COMMITS, never the whole history.
@@ -537,13 +537,21 @@ jobs:
           # .gitleaks.toml, so the && form failed the job for nearly everyone.
           CFG=""
           if [ -f .gitleaks.toml ]; then CFG="-c /repo/.gitleaks.toml"; fi
-          docker run --rm -v "$PWD:/repo" ghcr.io/betterleaks/betterleaks:v1.8.1 \
+          # git refuses to read a repository owned by another user ("detected dubious
+          # ownership"), and the container's user is not the runner's. Left unset,
+          # betterleaks scans nothing and still prints "no leaks found" — a clean bill
+          # of health for a scan that never happened, which is worse than an error.
+          docker run --rm -v "$PWD:/repo" \
+            -e GIT_CONFIG_COUNT=1 \
+            -e GIT_CONFIG_KEY_0=safe.directory \
+            -e GIT_CONFIG_VALUE_0=/repo \
+            ghcr.io/betterleaks/betterleaks:v1.8.1 \
             git /repo \
             --log-opts="${{ steps.range.outputs.value }}" \
             $CFG \
             -f json -r /repo/betterleaks.json \
             --exit-code 0 --redact --no-banner
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with: { name: betterleaks, path: betterleaks.json }
 
@@ -571,8 +579,8 @@ jobs:
       OPENGREP_VERSION: "1.29.0"
       OPENGREP_RULES_SHA: "f1d2b562b414783763fd02a6ed2736eaed622efa"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with: { name: tdxguard-tools }
       - name: Fetch Opengrep and its rules (pinned)
         run: |
@@ -598,11 +606,11 @@ jobs:
       - name: Clean up Opengrep rule ids
         run: |
           python3 sarif-enrich.py opengrep.sarif . --rule-roots python,javascript,typescript,go,generic --context 5 --expand-context
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with: { name: opengrep, path: opengrep.sarif }
       # Inline annotations on the pull request diff and the Security tab.
-      - uses: github/codeql-action/upload-sarif@v3
+      - uses: github/codeql-action/upload-sarif@v4
         if: always() && hashFiles('opengrep.sarif') != ''
         continue-on-error: true
         with: { sarif_file: opengrep.sarif, category: tdxguard-opengrep }
@@ -621,8 +629,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: [tools]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with: { name: tdxguard-tools }
       # Trivy's SARIF carries ONLY the misconfigurations (IaC). The vulnerabilities travel
       # through CycloneDX instead.
@@ -656,12 +664,12 @@ jobs:
       - name: Normalize the SARIF (unescape HTML, embed snippets)
         run: |
           python3 sarif-enrich.py trivy.sarif . --unescape-html
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with: { name: trivy, path: "trivy.sarif\nsbom.cdx.json" }
       # Inline annotations on the pull request diff and the Security tab. The findings
       # already travel to TDxGuard; this only puts them where the developer is looking.
-      - uses: github/codeql-action/upload-sarif@v3
+      - uses: github/codeql-action/upload-sarif@v4
         if: always() && hashFiles('trivy.sarif') != ''
         continue-on-error: true
         with: { sarif_file: trivy.sarif, category: tdxguard-trivy }
@@ -687,7 +695,7 @@ jobs:
     runs-on: ubuntu-latest
     if: inputs.image_ref != ''
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Build the image
         if: inputs.image_build_command != ''
@@ -712,7 +720,7 @@ jobs:
             -v "$PWD:/out" aquasec/trivy:0.58.1 \
             image --scanners secret --format sarif --output /out/trivy-image.sarif "$IMAGE_REF"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with: { name: image, path: "sbom-image.cdx.json\ntrivy-image.sarif" }
 
@@ -749,8 +757,8 @@ jobs:
     needs: [tools]
     if: inputs.app_start_command != ''
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with: { name: tdxguard-tools }
 
       - name: Install the application's dependencies
@@ -844,11 +852,11 @@ jobs:
           kill -TERM "$COLLECTOR" 2>/dev/null || true
           wait "$COLLECTOR" 2>/dev/null || true
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with: { name: runtime, path: "zen.json\nzap.json\nnuclei.sarif" }
 
-      - uses: github/codeql-action/upload-sarif@v3
+      - uses: github/codeql-action/upload-sarif@v4
         if: always() && hashFiles('nuclei.sarif') != ''
         continue-on-error: true
         with: { sarif_file: nuclei.sarif, category: tdxguard-nuclei }
@@ -867,7 +875,7 @@ jobs:
     needs: [betterleaks, opengrep, trivy, image_scan, runtime]
     if: always()          # push the results to the dashboard even when a gate failed
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with: { path: reports }
 
       - name: Fetch the SecObserve token from OpenBao (no static secret)
