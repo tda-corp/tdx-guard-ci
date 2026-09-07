@@ -20,6 +20,8 @@ on: [push, pull_request]
 permissions:
   contents: read
   id-token: write        # without this the CI cannot obtain an OpenBao token
+  security-events: write # findings as annotations on the pull request diff
+  pull-requests: write   # the summary comment on the pull request
 
 jobs:
   tdxguard:
@@ -28,6 +30,10 @@ jobs:
       product: <product name in TDxGuard>
       bao_role: ci-<project>
 ```
+
+All four permissions are required. A called workflow may not request more than its
+caller grants, and this pipeline declares all four — leave one out and GitHub refuses
+the run before it starts, reporting `startup_failure` with no logs to read.
 
 `bao_role` is handed out by the platform team when the project is onboarded with
 `openbao-stack/bootstrap/onboard-project.sh`. The pipeline holds no static secret:
