@@ -39,6 +39,17 @@ on:
         required: false
         type: boolean
         default: false
+      code_scanning:
+        description: >-
+          Upload SARIF to the repository's Security tab and annotate the pull request diff.
+          Off by default: on a PRIVATE repository this needs GitHub Advanced Security, a
+          paid add-on, and without it every run reports "Advanced Security must be enabled
+          for this repository to use code scanning" — an error annotation for something
+          nobody asked for. Public repositories get it for free and can turn this on.
+          The findings reach TDxGuard either way; this only controls GitHub's own view.
+        required: false
+        type: boolean
+        default: false
       image_ref:
         description: "Image to scan, e.g. ghcr.io/tda-corp/app:sha-abc123. Empty skips the image_scan job."
         required: false
@@ -611,7 +622,7 @@ jobs:
         with: { name: opengrep, path: opengrep.sarif }
       # Inline annotations on the pull request diff and the Security tab.
       - uses: github/codeql-action/upload-sarif@v4
-        if: always() && hashFiles('opengrep.sarif') != ''
+        if: always() && inputs.code_scanning && hashFiles('opengrep.sarif') != ''
         continue-on-error: true
         with: { sarif_file: opengrep.sarif, category: tdxguard-opengrep }
 
@@ -670,7 +681,7 @@ jobs:
       # Inline annotations on the pull request diff and the Security tab. The findings
       # already travel to TDxGuard; this only puts them where the developer is looking.
       - uses: github/codeql-action/upload-sarif@v4
-        if: always() && hashFiles('trivy.sarif') != ''
+        if: always() && inputs.code_scanning && hashFiles('trivy.sarif') != ''
         continue-on-error: true
         with: { sarif_file: trivy.sarif, category: tdxguard-trivy }
 
@@ -857,7 +868,7 @@ jobs:
         with: { name: runtime, path: "zen.json\nzap.json\nnuclei.sarif" }
 
       - uses: github/codeql-action/upload-sarif@v4
-        if: always() && hashFiles('nuclei.sarif') != ''
+        if: always() && inputs.code_scanning && hashFiles('nuclei.sarif') != ''
         continue-on-error: true
         with: { sarif_file: nuclei.sarif, category: tdxguard-nuclei }
 
