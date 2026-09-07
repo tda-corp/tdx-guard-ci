@@ -1,0 +1,1063 @@
+# TDxGuard — reusable workflow (GitHub Actions).
+# Lives in the central repository: tda-corp/tdxguard-ci  →  .github/workflows/tdxguard.yml
+#
+# Projects do NOT copy this file. They write a ten-line caller instead, see
+# examples/github-caller.yml.
+#
+# Flow: scan (Opengrep/Trivy/Betterleaks) → gate → exchange the CI's own OIDC identity for an
+#       OpenBao token → read the SecObserve token from OpenBao → push results and SBOM.
+# No static secret anywhere in the pipeline.
+
+name: tdxguard
+
+on:
+  workflow_call:
+    inputs:
+      product:
+        description: "Product name in SecObserve"
+        required: true
+        type: string
+      bao_role:
+        description: "CI role in OpenBao, handed out by the platform team, e.g. ci-tdxrecruify"
+        required: true
+        type: string
+      bao_addr:
+        description: "OpenBao address"
+        required: false
+        type: string
+        default: "https://vault.tdadevelop.com"
+      fail_on_critical:
+        description: "Fail the pipeline in the scan job itself when a severe vulnerability is found"
+        required: false
+        type: boolean
+        default: true
+      security_gate:
+        description: >-
+          Fail the pipeline according to the product's security gate in TDxGuard, whose
+          thresholds the security team sets in the dashboard. Usually combined with
+          fail_on_critical: false.
+        required: false
+        type: boolean
+        default: false
+      image_ref:
+        description: "Image to scan, e.g. ghcr.io/tda-corp/app:sha-abc123. Empty skips the image_scan job."
+        required: false
+        type: string
+        default: ""
+      image_build_command:
+        description: "Command that builds the image. Empty means the image is already in a registry."
+        required: false
+        type: string
+        default: ""
+      app_start_command:
+        description: "Command that starts the application. Empty skips the runtime job (IAST + DAST)."
+        required: false
+        type: string
+        default: ""
+      app_setup_command:
+        description: "Command installing the application's dependencies (pip install, npm ci, ...)"
+        required: false
+        type: string
+        default: ""
+      app_health_url:
+        description: "URL polled to wait for the application to come up"
+        required: false
+        type: string
+        default: "http://127.0.0.1:8000/"
+      zap_target:
+        description: "URL for ZAP to scan, usually the same as app_health_url. Empty skips DAST."
+        required: false
+        type: string
+        default: ""
+      zap_mode:
+        description: >-
+          "baseline" (passive, a few minutes) or "full" (active: ZAP actually fires attack
+          payloads, takes much longer). Only ever point "full" at a throwaway environment,
+          never at production data.
+        required: false
+        type: string
+        default: "baseline"
+      nuclei:
+        description: >-
+          Also run Nuclei against zap_target. Thousands of community templates for known
+          CVEs, exposed panels and misconfigurations on a live endpoint — and its attack
+          traffic is observed by Zen just like ZAP's.
+        required: false
+        type: boolean
+        default: false
+      traffic_command:
+        description: "Command generating traffic beyond ZAP's own (e2e tests, smoke tests)"
+        required: false
+        type: string
+        default: ""
+      zen_fail_on_attack:
+        description: "Fail the pipeline when Zen sees user input reach a dangerous sink"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write          # required: lets the CI mint the OIDC token it trades for an OpenBao one
+  security-events: write   # SARIF -> the pull request's Files changed tab and the Security tab
+  pull-requests: write     # the summary comment on the pull request
+
+jobs:
+  # The two helper scripts used to be pulled from raw.githubusercontent at run time.
+  # That breaks as soon as tdxguard-ci is private, and fetching a script over the
+  # network to run it immediately is a supply chain risk regardless of visibility:
+  # whatever that URL serves at that moment executes on the runner.
+  #
+  # They are written here instead. This job exists so the source lives in one place
+  # rather than being pasted into the three jobs that need it; the artifact costs a
+  # few seconds against duplicating two hundred lines three times.
+  tools:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Write the helper scripts
+        run: |
+          cat > sarif-enrich.py <<'TDXGUARD_SCRIPT_EOF'
+          #!/usr/bin/env python3
+          """
+          sarif-enrich.py — post-process a SARIF file before pushing it to SecObserve.
+
+              sarif-enrich.py <file.sarif> <repository-directory> [--unescape-html] [--kind-fail]
+                              [--rule-roots a,b,c] [--context N] [--expand-context]
+
+          It does three things:
+
+          1) --unescape-html : unescape the HTML entities in the text fields.
+             Trivy 0.58.x renders its SARIF through html/template, so quotes arrive escaped and a
+             title reads "&#39;apt-get&#39; missing &#39;--no-install-recommends&#39;".
+             SecObserve renders plain text, so the user sees the raw entities. The bug is Trivy's,
+             not SecObserve's -> fix it at the source, before it reaches the database.
+             Only enable this for Trivy. Semgrep and Gitleaks are not affected.
+
+          2) Embed the code with its context into region.snippet.
+             Trivy reports line numbers but no code. SecObserve does read region.snippet and puts it
+             into the description, so embedding it here shows the code inside the finding instead of
+             forcing the reader to open the repository.
+
+             The offending line is marked with a ">" at the front:
+
+                  28 |     apt-get update; \\
+               >  30 |     apt-get install -y curl; \\
+
+             By default an existing snippet is kept (Opengrep ships a bare one-line one). With
+             --expand-context the snippet is rebuilt from the file with --context lines around the
+             region and line numbers, so a one-line Opengrep finding still shows its surrounding code
+             inline instead of a single stranded line.
+
+          3) --rule-roots a,b,c : trim each result.ruleId (and rules[].id) to begin at the first
+             path segment matching one of the roots. Opengrep prefixes the rule id with the
+             --config path, so a finding's id (which SecObserve shows as its title) becomes
+             "ogrules.python.<rule>" or worse; with --rule-roots python,javascript,... it becomes
+             the clean "python.<rule>". The scan itself must run from the repo root with a relative
+             target so the file paths stay relative and the source links work.
+
+          4) --kind-fail : rewrite result.kind "open" -> "fail".
+             SARIF reserves kind "fail" for "a problem was found" and "open" for a result that still
+             needs human judgement (§3.27.9). SecObserve imports only "fail", which is correct.
+             Nuclei, however, stamps "open" on every single match, confirmed ones included, so
+             without this every Nuclei finding is dropped and the upload reports 0 observations
+             while returning HTTP 200 — a silent loss.
+             Only enable this for Nuclei.
+
+          Nothing else in the file is touched. Safe to run repeatedly (idempotent).
+          """
+          import html
+          import json
+          import sys
+          from pathlib import Path
+
+          MAX_REGION_LINES = 40   # truncate an overly long region so the description stays readable
+          DEFAULT_CONTEXT = 4     # lines of context above and below
+
+
+          def unescape_deep(node):
+              """Unescape the HTML entities in every 'text' field of the SARIF tree."""
+              if isinstance(node, dict):
+                  return {
+                      k: (html.unescape(v) if k == "text" and isinstance(v, str) else unescape_deep(v))
+                      for k, v in node.items()
+                  }
+              if isinstance(node, list):
+                  return [unescape_deep(x) for x in node]
+              return node
+
+
+          def build_snippet(path: Path, start: int, end: int, context: int):
+              """Build a numbered snippet, marking the offending lines with ">"."""
+              try:
+                  lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+              except (OSError, UnicodeDecodeError):
+                  return None
+              if not lines or start < 1 or start > len(lines):
+                  return None
+
+              end = max(end or start, start)
+              if end - start + 1 > MAX_REGION_LINES:
+                  end = start + MAX_REGION_LINES - 1
+              lo = max(1, start - context)
+              hi = min(len(lines), end + context)
+
+              width = len(str(hi))
+              out = []
+              for n in range(lo, hi + 1):
+                  marker = ">" if start <= n <= end else " "
+                  out.append(f"{marker} {str(n).rjust(width)} | {lines[n - 1]}")
+              if hi < len(lines):
+                  out.append(f"{' ' * (width + 2)} | ...")
+              return "\n".join(out)
+
+
+          def main() -> int:
+              if len(sys.argv) < 3:
+                  print(__doc__.strip(), file=sys.stderr)
+                  return 2
+              sarif_path, repo = Path(sys.argv[1]), Path(sys.argv[2])
+              unescape = "--unescape-html" in sys.argv
+              kind_fail = "--kind-fail" in sys.argv
+              expand_context = "--expand-context" in sys.argv
+              rule_roots = []
+              if "--rule-roots" in sys.argv:
+                  rule_roots = [r for r in sys.argv[sys.argv.index("--rule-roots") + 1].split(",") if r]
+              context = DEFAULT_CONTEXT
+              if "--context" in sys.argv:
+                  context = int(sys.argv[sys.argv.index("--context") + 1])
+
+              if not sarif_path.is_file() or sarif_path.stat().st_size == 0:
+                  return 0
+              try:
+                  data = json.loads(sarif_path.read_text(encoding="utf-8"))
+              except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+                  print(f"sarif-enrich: skipping {sarif_path.name}: {exc}", file=sys.stderr)
+                  return 0
+
+              if unescape:
+                  data = unescape_deep(data)
+
+              def trim_id(rid):
+                  # Keep the id from the first segment that is a known rule root, dropping the
+                  # --config path prefix Opengrep prepends. "ogrules.python.sqlalchemy.x" with
+                  # roots [python,...] -> "python.sqlalchemy.x".
+                  if not rid or not rule_roots:
+                      return rid
+                  parts = rid.split(".")
+                  for i, seg in enumerate(parts):
+                      if seg in rule_roots:
+                          return ".".join(parts[i:])
+                  return rid
+
+              added = 0
+              rekinded = 0
+              retitled = 0
+              for run in data.get("runs") or []:
+                  if rule_roots:
+                      for rule in (run.get("tool", {}).get("driver", {}) or {}).get("rules") or []:
+                          # SecObserve titles a finding from rule.name (falling back to rule.id), and
+                          # Opengrep puts the full --config path in rule.name/.id. Trim both, and
+                          # replace the same ugly string where it is quoted inside the rule's
+                          # short/full description text ("Opengrep Finding: <full path>").
+                          for key in ("id", "name"):
+                              original = rule.get(key)
+                              trimmed = trim_id(original)
+                              if trimmed and trimmed != original:
+                                  rule[key] = trimmed
+                                  retitled += 1
+                                  for desc_key in ("shortDescription", "fullDescription"):
+                                      desc = rule.get(desc_key)
+                                      if isinstance(desc, dict) and isinstance(desc.get("text"), str):
+                                          desc["text"] = desc["text"].replace(original, trimmed)
+                  for result in run.get("results") or []:
+                      if kind_fail and result.get("kind") == "open":
+                          result["kind"] = "fail"
+                          rekinded += 1
+                      if rule_roots:
+                          result["ruleId"] = trim_id(result.get("ruleId"))
+                      for loc in result.get("locations") or []:
+                          phys = loc.get("physicalLocation") or {}
+                          uri = (phys.get("artifactLocation") or {}).get("uri")
+                          region = phys.get("region")
+                          if not uri or not region:
+                              continue
+                          existing = (region.get("snippet") or {}).get("text")
+                          # A snippet is already there (Opengrep ships a bare one-line one). By default
+                          # keep it; with --expand-context, rebuild it from the file with surrounding
+                          # context and line numbers so the finding is readable inline. If the file can
+                          # not be read, the scanner's original snippet is left untouched.
+                          if existing and not expand_context:
+                              continue
+                          start = region.get("startLine")
+                          if not start:
+                              continue
+                          if uri.startswith("file://"):
+                              uri = uri[7:]
+                          target = repo / uri.lstrip("/")
+                          snippet = build_snippet(target, start, region.get("endLine"), context)
+                          if snippet:
+                              region["snippet"] = {"text": snippet}
+                              added += 1
+
+              sarif_path.write_text(json.dumps(data), encoding="utf-8")
+              print(f"sarif-enrich: {sarif_path.name} — embedded {added} snippet(s)"
+                    + (", unescaped the HTML entities" if unescape else "")
+                    + (f", rewrote {rekinded} result kind(s) to fail" if kind_fail else "")
+                    + (f", trimmed {retitled} rule id(s)" if rule_roots else ""))
+              return 0
+
+
+          if __name__ == "__main__":
+              sys.exit(main())
+          TDXGUARD_SCRIPT_EOF
+          cat > zen-collector.py <<'TDXGUARD_SCRIPT_EOF'
+          #!/usr/bin/env python3
+          """Collect Aikido Zen's attack events into a JSON file for TDxGuard.
+
+          Zen (an in-app firewall) writes no file of its own — it POSTs its events to Aikido's
+          server. This script impersonates that server: the application runs with AIKIDO_ENDPOINT
+          pointing here, every `detected_attack` event is written to a file, and not a byte leaves
+          the CI runner.
+
+          Standard library only — runs on any image that ships python3.
+
+              python3 zen-collector.py --out zen.json --port 5000 --strip-prefix "$PWD" &
+
+              AIKIDO_TOKEN=tdxguard-local \
+              AIKIDO_ENDPOINT=http://127.0.0.1:5000/ \
+                <command starting the app>
+
+          Note: without AIKIDO_TOKEN Zen does NOT start its background process, so the variable is
+          mandatory — any non-empty string will do.
+          """
+
+          import argparse
+          import json
+          import os
+          import re
+          import signal
+          import sys
+          import threading
+          from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+          EVENT_TYPES = ("detected_attack", "detected_attack_wave")
+          STACK_FRAME = re.compile(r"(File: )(.+?)(, L[0-9]+ )")
+
+          # The configuration handed back to Zen. Deliberately empty: the collector does not drive
+          # the firewall, it only listens. Blocking is decided by the application's AIKIDO_BLOCK.
+          SERVICE_CONFIG = {
+              "success": True,
+              "endpoints": [],
+              "configUpdatedAt": 0,
+              "blockedUserIds": [],
+              "allowedIPAddresses": [],
+              "receivedAnyStats": True,
+          }
+          FIREWALL_LISTS = {
+              "success": True,
+              "blockedIPAddresses": [],
+              "allowedIPAddresses": [],
+              "blockedUserAgents": "",
+          }
+
+
+          class Collector:
+              """Keeps the events and rewrites the file after every one that arrives."""
+
+              def __init__(self, out_path, strip_prefix):
+                  self.out_path = out_path
+                  self.strip_prefix = strip_prefix
+                  self.events = []
+                  self.agent = {}
+                  self.lock = threading.Lock()
+
+              def add(self, event):
+                  with self.lock:
+                      # Every Zen event carries an "agent" block (version, library, hostname).
+                      agent = event.get("agent")
+                      if isinstance(agent, dict):
+                          # Merge rather than replace: a later event may omit a key an earlier one had.
+                          self.agent.update({key: value for key, value in agent.items() if value})
+                      if event.get("type") in EVENT_TYPES:
+                          self.events.append(self._rewrite_paths(event))
+                      self._write()
+
+              def _rewrite_paths(self, event):
+                  # Zen's stack traces hold absolute container paths (/src/app/api.py). TDxGuard
+                  # needs them relative to the repository to link a finding back to the source.
+                  if not self.strip_prefix:
+                      return event
+                  attack = event.get("attack")
+                  if not isinstance(attack, dict) or not isinstance(attack.get("stack"), str):
+                      return event
+                  attack["stack"] = STACK_FRAME.sub(self._strip_frame, attack["stack"])
+                  return event
+
+              def _strip_frame(self, match):
+                  path = match.group(2)
+                  for prefix in self.strip_prefix:
+                      if path.startswith(prefix):
+                          path = path.removeprefix(prefix).lstrip("/")
+                          break
+                  return match.group(1) + path + match.group(3)
+
+              def _write(self):
+                  document = {
+                      "zen": {
+                          "collector": "tdxguard-zen-collector",
+                          "library": self.agent.get("library"),
+                          "version": self.agent.get("version"),
+                          "hostname": self.agent.get("hostname"),
+                      },
+                      "events": self.events,
+                  }
+                  # Write to a temporary file and rename: if the CI kills the collector midway, the
+                  # result is still valid JSON rather than a half-written file.
+                  tmp_path = self.out_path + ".tmp"
+                  with open(tmp_path, "w", encoding="utf-8") as tmp_file:
+                      json.dump(document, tmp_file, indent=2)
+                  os.replace(tmp_path, self.out_path)
+
+
+          class Handler(BaseHTTPRequestHandler):
+              collector = None
+
+              def do_POST(self):  # noqa: N802  (signature dictated by BaseHTTPRequestHandler)
+                  length = int(self.headers.get("Content-Length") or 0)
+                  body = self.rfile.read(length) if length else b"{}"
+                  try:
+                      event = json.loads(body)
+                  except ValueError:
+                      self._respond(400, {"success": False, "error": "invalid_json"})
+                      return
+
+                  if isinstance(event, dict):
+                      self.collector.add(event)
+
+                  self._respond(200, SERVICE_CONFIG)
+
+              def do_GET(self):  # noqa: N802
+                  self._respond(200, FIREWALL_LISTS)
+
+              def _respond(self, status, payload):
+                  body = json.dumps(payload).encode("utf-8")
+                  self.send_response(status)
+                  self.send_header("Content-Type", "application/json")
+                  self.send_header("Content-Length", str(len(body)))
+                  self.end_headers()
+                  self.wfile.write(body)
+
+              def log_message(self, format, *args):  # noqa: A002  (signature of the parent class)
+                  pass  # http.server's default logging just clutters the CI output
+
+
+          def main():
+              parser = argparse.ArgumentParser(description=__doc__)
+              parser.add_argument("--out", default="zen.json", help="output file (default zen.json)")
+              parser.add_argument("--port", type=int, default=5000, help="port to listen on (default 5000)")
+              parser.add_argument("--host", default="127.0.0.1", help="address to listen on")
+              parser.add_argument(
+                  "--strip-prefix",
+                  action="append",
+                  default=[],
+                  help="path prefix to strip from the stack traces, repeatable",
+              )
+              args = parser.parse_args()
+
+              collector = Collector(args.out, [p.rstrip("/") for p in args.strip_prefix])
+              collector.add({"type": "collector_started"})  # write a valid empty file right away
+
+              Handler.collector = collector
+              server = ThreadingHTTPServer((args.host, args.port), Handler)
+
+              def shutdown(_signum, _frame):
+                  print(f"zen-collector: {len(collector.events)} event(s) -> {args.out}", flush=True)
+                  threading.Thread(target=server.shutdown, daemon=True).start()
+
+              signal.signal(signal.SIGTERM, shutdown)
+              signal.signal(signal.SIGINT, shutdown)
+
+              print(f"zen-collector: listening on http://{args.host}:{args.port}/", flush=True)
+              server.serve_forever()
+              print(f"zen-collector: {len(collector.events)} event(s) -> {args.out}", flush=True)
+              return 0
+
+
+          if __name__ == "__main__":
+              sys.exit(main())
+          TDXGUARD_SCRIPT_EOF
+          python3 -m py_compile sarif-enrich.py zen-collector.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tdxguard-tools
+          path: "*.py"
+          retention-days: 1
+
+  betterleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+
+      # IMPORTANT: scan only the NEW COMMITS, never the whole history.
+      # Git history is immutable: a repository that ever had a finding (a false positive
+      # included) stays RED forever if everything is scanned -> the team turns the scan
+      # off. A secret that made it into the history is handled by ROTATING it, not by a
+      # CI gate.
+      - name: Determine the range to scan
+        id: range
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            RANGE="${{ github.event.pull_request.base.sha }}..HEAD"
+          else
+            BEFORE="${{ github.event.before }}"
+            if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+              # new branch or very first commit: scan the last commit only
+              RANGE=$(git rev-parse HEAD~1 >/dev/null 2>&1 && echo "HEAD~1..HEAD" || echo "HEAD")
+            else
+              RANGE="$BEFORE..HEAD"
+            fi
+          fi
+          echo "value=$RANGE" >> "$GITHUB_OUTPUT"
+          echo "Scanning range: $RANGE"
+
+      # Betterleaks writes the native JSON array [{RuleID, Match, Secret, ...}] that
+      # SecObserve's "Betterleaks" parser reads directly (parser_name=Betterleaks) — no
+      # SARIF detour. It reads the same .gitleaks.toml config as gitleaks (same author),
+      # honouring -c / GITLEAKS_CONFIG. --redact keeps the secret out of the logs.
+      #
+      # No code-scanning upload for secrets on purpose: a committed secret is a hard gate
+      # failure with a clear message, and rendering its location in the Security tab adds
+      # little while surfacing where the secret sits.
+      - name: Scan for committed secrets (new commits only)
+        run: |
+          CFG=""
+          [ -f .gitleaks.toml ] && CFG="-c /repo/.gitleaks.toml"
+          docker run --rm -v "$PWD:/repo" ghcr.io/betterleaks/betterleaks:v1.8.1 \
+            git /repo \
+            --log-opts="${{ steps.range.outputs.value }}" \
+            $CFG \
+            -f json -r /repo/betterleaks.json \
+            --exit-code 0 --redact --no-banner
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: betterleaks, path: betterleaks.json }
+
+      - name: Fail on committed secrets
+        if: inputs.fail_on_critical
+        run: |
+          COUNT=$(jq 'length' betterleaks.json)
+          if [ "$COUNT" -ne 0 ]; then
+            echo "::error::Found $COUNT committed secret(s). Details in TDxGuard."
+            exit 1
+          fi
+
+  # Opengrep — the LGPL fork of Semgrep. We moved off Semgrep because its rule registry
+  # (the p/* packs) carries usage restrictions for a security product shipped to clients;
+  # Opengrep's engine and rules stay cleanly open. Same rule syntax, same SARIF output.
+  #
+  # Opengrep ships no Docker image, so the pinned binary and rules are downloaded. The
+  # rules are pinned to a commit (opengrep-rules has no release tags). --config points at
+  # the per-language directories; pointing it at the whole tree trips over a few invalid
+  # community rule files and silently returns nothing.
+  opengrep:
+    runs-on: ubuntu-latest
+    needs: [tools]
+    env:
+      OPENGREP_VERSION: "1.29.0"
+      OPENGREP_RULES_SHA: "f1d2b562b414783763fd02a6ed2736eaed622efa"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: tdxguard-tools }
+      - name: Fetch Opengrep and its rules (pinned)
+        run: |
+          curl -sSfL -o opengrep \
+            "https://github.com/opengrep/opengrep/releases/download/v${OPENGREP_VERSION}/opengrep_manylinux_x86"
+          chmod +x opengrep
+          curl -sSfL -o rules.tar.gz \
+            "https://github.com/opengrep/opengrep-rules/archive/${OPENGREP_RULES_SHA}.tar.gz"
+          mkdir -p ogrules && tar xzf rules.tar.gz -C ogrules --strip-components=1
+      # Scan "." from the repo root so the file paths in the SARIF stay relative and the
+      # source links in TDxGuard resolve. Opengrep then prefixes each rule id with the
+      # --config path; the next step trims that.
+      - name: Scan the source code (SAST)
+        run: |
+          ./opengrep scan --sarif --output opengrep.sarif --quiet \
+            --config ogrules/python --config ogrules/javascript --config ogrules/typescript \
+            --config ogrules/go --config ogrules/generic \
+            --exclude=node_modules --exclude=.venv --exclude=vendor \
+            --exclude=dist --exclude=build . || true
+      # SecObserve uses the rule id as the finding title, and Opengrep's id carries the
+      # --config path ("ogrules.python.<rule>"). --rule-roots trims it to "python.<rule>".
+      # (Opengrep already embeds region.snippet, so this only rewrites the ids.)
+      - name: Clean up Opengrep rule ids
+        run: |
+          python3 sarif-enrich.py opengrep.sarif . --rule-roots python,javascript,typescript,go,generic --context 5 --expand-context
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: opengrep, path: opengrep.sarif }
+      # Inline annotations on the pull request diff and the Security tab.
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always() && hashFiles('opengrep.sarif') != ''
+        continue-on-error: true
+        with: { sarif_file: opengrep.sarif, category: tdxguard-opengrep }
+
+      - name: Fail on ERROR severity findings
+        if: inputs.fail_on_critical
+        run: |
+          ./opengrep scan --error --severity=ERROR --quiet \
+            --config ogrules/python --config ogrules/javascript --config ogrules/typescript \
+            --config ogrules/go --config ogrules/generic \
+            --exclude=node_modules --exclude=.venv --exclude=vendor \
+            --exclude=dist --exclude=build . \
+            || { echo "::error::Opengrep: ERROR severity findings present."; exit 1; }
+
+  trivy:
+    runs-on: ubuntu-latest
+    needs: [tools]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: tdxguard-tools }
+      # Trivy's SARIF carries ONLY the misconfigurations (IaC). The vulnerabilities travel
+      # through CycloneDX instead.
+      #
+      # SARIF is a SAST format: it has no place for a package, a version, a CVSS score or a
+      # CVE. SecObserve's SARIF parser only extracts vulnerability_id for Dependency-Check,
+      # so Trivy's ruleId = CVE-xxxx is dropped -> the finding lands in the database with an
+      # empty vulnerability_id, no CVSS, no EPSS and no component.
+      - name: Scan dependencies and infrastructure
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src aquasec/trivy:0.58.1 \
+            fs . --scanners misconfig --format sarif --output trivy.sarif \
+            --skip-dirs node_modules --skip-dirs .venv --skip-dirs vendor
+      # CycloneDX carries BOTH the components AND the vulnerabilities, so this single file
+      # replaces what used to be two paths (a separate SBOM plus an OSV scan for the CVEs).
+      # Dropping "--scanners vuln" silently turns the vulnerability scan off — Trivy warns
+      # about it, but still writes a perfectly valid file.
+      - name: Generate the SBOM including vulnerabilities
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src aquasec/trivy:0.58.1 \
+            fs . --format cyclonedx --scanners vuln --output sbom.cdx.json \
+            --skip-dirs node_modules --skip-dirs .venv --skip-dirs vendor
+      # Trivy 0.58.x renders its SARIF through html/template, so quotes arrive escaped
+      # ("&#39;apt-get&#39;...") and no snippet is included. Normalize before uploading.
+      - name: Normalize the SARIF (unescape HTML, embed snippets)
+        run: |
+          python3 sarif-enrich.py trivy.sarif . --unescape-html
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: trivy, path: "trivy.sarif\nsbom.cdx.json" }
+      # Inline annotations on the pull request diff and the Security tab. The findings
+      # already travel to TDxGuard; this only puts them where the developer is looking.
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always() && hashFiles('trivy.sarif') != ''
+        continue-on-error: true
+        with: { sarif_file: trivy.sarif, category: tdxguard-trivy }
+
+      - name: Fail on fixable CRITICAL/HIGH vulnerabilities
+        if: inputs.fail_on_critical
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src aquasec/trivy:0.58.1 \
+            fs . --scanners vuln,misconfig --severity CRITICAL,HIGH \
+            --ignore-unfixed --exit-code 1
+
+  # Scan the built image — the OS packages and libraries that live INSIDE it, which
+  # `trivy fs .` on the source tree never sees: a stale base image, apt/apk packages
+  # carrying CVEs.
+  #
+  # The image SBOM is uploaded under its OWN file name (sbom-image.cdx.json). TDxGuard
+  # groups components by (product, branch, upload_filename), so the source SBOM and the
+  # image SBOM live side by side — under the same file name the later one wipes the
+  # earlier one.
+  #
+  # The job only runs when the project declares image_ref.
+  image_scan:
+    runs-on: ubuntu-latest
+    if: inputs.image_ref != ''
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the image
+        if: inputs.image_build_command != ''
+        env:
+          IMAGE_BUILD_COMMAND: ${{ inputs.image_build_command }}
+        run: sh -c "$IMAGE_BUILD_COMMAND"
+
+      - name: Generate the image SBOM including vulnerabilities
+        env:
+          IMAGE_REF: ${{ inputs.image_ref }}
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$PWD:/out" aquasec/trivy:0.58.1 \
+            image --format cyclonedx --scanners vuln \
+            --output /out/sbom-image.cdx.json "$IMAGE_REF"
+
+      - name: Scan for secrets baked into the image
+        env:
+          IMAGE_REF: ${{ inputs.image_ref }}
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$PWD:/out" aquasec/trivy:0.58.1 \
+            image --scanners secret --format sarif --output /out/trivy-image.sarif "$IMAGE_REF"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: image, path: "sbom-image.cdx.json\ntrivy-image.sarif" }
+
+      - name: Fail on fixable CRITICAL/HIGH vulnerabilities in the image
+        if: inputs.fail_on_critical
+        env:
+          IMAGE_REF: ${{ inputs.image_ref }}
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+            aquasec/trivy:0.58.1 image --scanners vuln \
+            --severity CRITICAL,HIGH --ignore-unfixed --exit-code 1 "$IMAGE_REF"
+
+  # IAST + DAST — start the application ONCE, collect two kinds of result.
+  #
+  # Zen is an in-app firewall: it sits INSIDE the process, hooks the dangerous sinks
+  # (running a SQL statement, spawning a shell, opening a file, calling out over HTTP) and
+  # compares their arguments against the data of the request. It sees the final SQL string
+  # and knows which part of it came from the user — what SAST has to guess with rules and
+  # DAST has to guess from the outside. A Zen finding is almost always a real
+  # vulnerability, with the exact line of code in its stack trace.
+  #
+  # ZAP works the other way around: it fires payloads from the outside and knows nothing
+  # about the code. Put together, ZAP's attack traffic IS the traffic Zen observes — ZAP
+  # reports "possible SQLi at /users", Zen confirms "the payload reached sqlite3.execute,
+  # line 20". A blind DAST alert gets proven by evidence from the inside.
+  #
+  # Zen writes no file of its own, it POSTs its events to Aikido's server. We run a local
+  # collector on 127.0.0.1 and point AIKIDO_ENDPOINT at it: not a byte leaves the runner,
+  # and no Aikido account is needed.
+  #
+  # The job only runs when the project declares app_start_command.
+  runtime:
+    runs-on: ubuntu-latest
+    needs: [tools]
+    if: inputs.app_start_command != ''
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: tdxguard-tools }
+
+      - name: Install the application's dependencies
+        if: inputs.app_setup_command != ''
+        env:
+          APP_SETUP_COMMAND: ${{ inputs.app_setup_command }}
+        run: sh -c "$APP_SETUP_COMMAND"
+
+      - name: Run the application, fire ZAP at it, collect Zen's events
+        env:
+          # Without AIKIDO_TOKEN Zen does NOT start its background process and reports
+          # nothing at all -> it has to be set, to any value (the collector ignores it).
+          AIKIDO_TOKEN: tdxguard-local
+          AIKIDO_ENDPOINT: http://127.0.0.1:5000/
+          # Detect only, never block: blocking in CI would break the very tests being run.
+          AIKIDO_BLOCK: "false"
+          APP_START_COMMAND: ${{ inputs.app_start_command }}
+          APP_HEALTH_URL: ${{ inputs.app_health_url }}
+          TRAFFIC_COMMAND: ${{ inputs.traffic_command }}
+          ZAP_TARGET: ${{ inputs.zap_target }}
+          ZAP_MODE: ${{ inputs.zap_mode }}
+          NUCLEI: ${{ inputs.nuclei }}
+        run: |
+          set -u
+          python3 zen-collector.py --out zen.json --port 5000 --strip-prefix "$PWD" &
+          COLLECTOR=$!
+
+          sh -c "$APP_START_COMMAND" &
+          APP=$!
+
+          # Wait for the application, at most 120s.
+          READY=0
+          for _ in $(seq 1 60); do
+            if curl -sS -o /dev/null "$APP_HEALTH_URL"; then READY=1; break; fi
+            sleep 2
+          done
+
+          if [ "$READY" -ne 1 ]; then
+            echo "::warning::The application never came up at $APP_HEALTH_URL — skipping IAST and DAST."
+          else
+            if [ -n "$ZAP_TARGET" ]; then
+              # baseline = passive (spider + look at the responses). full = active: ZAP
+              # sends the payloads itself, finds far more and takes far longer.
+              case "$ZAP_MODE" in
+                full) ZAP_SCRIPT=zap-full-scan.py ;;
+                *)    ZAP_SCRIPT=zap-baseline.py ;;
+              esac
+              # The output directory has to be 777: ZAP runs as uid 1000 (user zap) inside
+              # its container while the runner's workspace belongs to uid 1001, so writing
+              # straight into $PWD fails with a permission error.
+              mkdir -p zap-out && chmod 777 zap-out
+              # --network host: ZAP runs in a container, the application runs on the runner.
+              # -I: warnings do not make ZAP exit non-zero, the gate lives in TDxGuard.
+              docker run --rm --network host -v "$PWD/zap-out:/zap/wrk:rw" \
+                ghcr.io/zaproxy/zaproxy:2.16.1 \
+                "$ZAP_SCRIPT" -t "$ZAP_TARGET" -J zap.json -I \
+                || echo "::warning::ZAP exited with an error."
+              [ -f zap-out/zap.json ] && mv zap-out/zap.json zap.json
+
+              if [ "$NUCLEI" = "true" ]; then
+                # Nuclei writes SARIF natively (-sarif-export), so it travels the same path
+                # as Opengrep and Trivy: annotations on the diff and the SARIF parser.
+                # The image ships no templates: it downloads them on first run (~1 minute).
+                # Do NOT add -disable-update-check, that leaves it with nothing to run.
+                mkdir -p nuclei-out && chmod 777 nuclei-out
+                docker run --rm --network host -v "$PWD/nuclei-out:/out" \
+                  projectdiscovery/nuclei:v3.4.10 \
+                  -target "$ZAP_TARGET" -severity low,medium,high,critical \
+                  -sarif-export /out/nuclei.sarif -no-interactsh -silent \
+                  || echo "::warning::Nuclei exited with an error."
+                if [ -f nuclei-out/nuclei.sarif ]; then
+                  mv nuclei-out/nuclei.sarif nuclei.sarif
+                  # Nuclei stamps kind "open" on every match, and SecObserve imports only
+                  # kind "fail" (SARIF §3.27.9). Without this the upload returns HTTP 200
+                  # with zero observations — a silent loss. Verified on a real scan.
+                  python3 sarif-enrich.py nuclei.sarif . --kind-fail
+                fi
+              fi
+            fi
+            if [ -n "$TRAFFIC_COMMAND" ]; then
+              sh -c "$TRAFFIC_COMMAND" || echo "::warning::The traffic command returned an error."
+            fi
+            if [ -z "$ZAP_TARGET" ] && [ -z "$TRAFFIC_COMMAND" ]; then
+              echo "::warning::Neither zap_target nor traffic_command is set — Zen has nothing to observe."
+            fi
+          fi
+
+          # Zen reports asynchronously through its background process; give it time to flush.
+          sleep 5
+          kill "$APP" 2>/dev/null || true
+          kill -TERM "$COLLECTOR" 2>/dev/null || true
+          wait "$COLLECTOR" 2>/dev/null || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: runtime, path: "zen.json\nzap.json\nnuclei.sarif" }
+
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always() && hashFiles('nuclei.sarif') != ''
+        continue-on-error: true
+        with: { sarif_file: nuclei.sarif, category: tdxguard-nuclei }
+
+      - name: Fail when Zen saw an attack reach a sink
+        if: inputs.zen_fail_on_attack
+        run: |
+          COUNT=$(jq '[.events[] | select(.type=="detected_attack")] | length' zen.json)
+          if [ "$COUNT" -ne 0 ]; then
+            echo "::error::Zen: user input reached a dangerous sink $COUNT time(s)."
+            exit 1
+          fi
+
+  publish:
+    runs-on: ubuntu-latest
+    needs: [betterleaks, opengrep, trivy, image_scan, runtime]
+    if: always()          # push the results to the dashboard even when a gate failed
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: reports }
+
+      - name: Fetch the SecObserve token from OpenBao (no static secret)
+        env:
+          BAO_ADDR: ${{ inputs.bao_addr }}
+          BAO_ROLE: ${{ inputs.bao_role }}
+        run: |
+          set -euo pipefail
+          # 1) Ask GitHub Actions for its own OIDC token
+          JWT=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=openbao" | jq -r '.value')
+          # 2) Trade it for a short-lived OpenBao token
+          BAO_TOKEN=$(curl -sS -X POST \
+            -d "{\"jwt\":\"$JWT\",\"role\":\"$BAO_ROLE\"}" \
+            "$BAO_ADDR/v1/auth/jwt/login" | jq -r '.auth.client_token')
+          if [ "$BAO_TOKEN" = "null" ] || [ -z "$BAO_TOKEN" ]; then
+            echo "::error::Could not trade the OIDC token for an OpenBao one. Check bao_role and the id-token: write permission."
+            exit 1
+          fi
+          # 3) Read the SecObserve credentials
+          RESP=$(curl -sS -H "X-Vault-Token: $BAO_TOKEN" \
+            "$BAO_ADDR/v1/secret/data/tdxguard/ci")
+          for K in SECOBSERVE_URL SECOBSERVE_API_TOKEN; do
+            V=$(echo "$RESP" | jq -r ".data.data.$K")
+            echo "::add-mask::$V"
+            echo "$K=$V" >> "$GITHUB_ENV"
+          done
+          # Optional: the dashboard URL, for the deep links in the summary. Not a secret.
+          UI=$(echo "$RESP" | jq -r '.data.data.SECOBSERVE_UI_URL // empty')
+          echo "SECOBSERVE_UI_URL=$UI" >> "$GITHUB_ENV"
+
+      - name: Push the results to SecObserve
+        env:
+          PRODUCT: ${{ inputs.product }}
+          IMAGE_REF: ${{ inputs.image_ref }}
+          ZAP_TARGET: ${{ inputs.zap_target }}
+        run: |
+          set -uo pipefail
+          BRANCH="${GITHUB_REF_NAME}"
+
+          upload() {   # $1 = report file, $2... = extra form fields
+            FILE="$1"; shift
+            [ -f "$FILE" ] || return 0
+            # Put -F in front of every field while KEEPING the spaces inside its value
+            # ("parser_name=Aikido Zen"): each round appends "-F <field>" at the end and
+            # drops the field at the front. Concatenating into an unquoted $EXTRA would
+            # split "Aikido Zen" into two arguments.
+            N=$#
+            i=0
+            while [ "$i" -lt "$N" ]; do
+              set -- "$@" -F "$1"
+              shift
+              i=$((i + 1))
+            done
+            curl -sS -f -X POST \
+              "$SECOBSERVE_URL/api/import/file_upload_observations_by_name/" \
+              -H "Authorization: APIToken $SECOBSERVE_API_TOKEN" \
+              -F "file=@$FILE" \
+              -F "product_name=$PRODUCT" \
+              -F "branch_name=$BRANCH" \
+              "$@" \
+              && echo "  pushed: $FILE" \
+              || echo "::warning::Could not push $FILE"
+          }
+          # parser_name is stated explicitly rather than left to auto-detection: several
+          # parsers accept a SARIF file, and they are tried in alphabetical order.
+          # Betterleaks writes [] when clean, which the Betterleaks parser rejects; skip
+          # it. An empty new-commit scan does not mean an old secret in history is gone.
+          if [ -f reports/betterleaks/betterleaks.json ] && [ "$(jq 'length' reports/betterleaks/betterleaks.json)" -gt 0 ]; then
+            upload reports/betterleaks/betterleaks.json "parser_name=Betterleaks"
+          fi
+          upload reports/opengrep/opengrep.sarif "parser_name=SARIF"
+          upload reports/trivy/trivy.sarif "parser_name=SARIF"
+          upload reports/image/trivy-image.sarif "parser_name=SARIF" "docker_image_name_tag=$IMAGE_REF"
+          # No endpoint_url for zen.json: the parser derives one per route (/users), and
+          # the form field would overwrite it with the bare target.
+          upload reports/runtime/zen.json "parser_name=Aikido Zen"
+          upload reports/runtime/zap.json "parser_name=ZAP" "endpoint_url=$ZAP_TARGET"
+          upload reports/runtime/nuclei.sarif "parser_name=SARIF" "endpoint_url=$ZAP_TARGET"
+
+          # --- SBOM: one upload yields both the CVEs and the components ---
+          # Trivy's CycloneDX file carries both, and the observations endpoint handles both
+          # in the same call (observations through get_observations, components through
+          # get_license_components). So file_upload_sbom_by_name is NOT needed.
+          #
+          # The worthwhile difference: the observations endpoint accepts
+          # docker_image_name_tag, the sbom endpoint does not — which is how the image's
+          # CVEs end up attached to the right image.
+          upload reports/trivy/sbom.cdx.json "parser_name=CycloneDX"
+          upload reports/image/sbom-image.cdx.json "parser_name=CycloneDX" \
+            "docker_image_name_tag=$IMAGE_REF"
+
+          # No OSV scan here. Trivy's CycloneDX already carries the CVEs, and running
+          # OSV on top reported the very same CVEs a second time — every one of them
+          # counted twice by the gate and in the product header. EPSS does not need it
+          # either: TDxGuard enriches every observation with a CVE id on its own. OSV
+          # stays available per product in the dashboard (osv_enabled) for anyone who
+          # wants a second opinion there.
+
+      # What Aikido shows on a pull request, from the reports already produced: one
+      # table with the counts per scanner and a link straight into TDxGuard. Written to
+      # the job summary always, and as ONE sticky comment on a pull request (updated in
+      # place on every run, never a new comment each time).
+      - name: Summarize the results on the pull request
+        if: always()
+        env:
+          PRODUCT: ${{ inputs.product }}
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -uo pipefail
+          BRANCH="${GITHUB_REF_NAME}"
+
+          # <label> <file> <jq filter for the count> [<jq filter for the severe count>]
+          count() { [ -f "$2" ] && jq "$3" "$2" 2>/dev/null || echo "-"; }
+          row() {   # $1 = scanner, $2 = file, $3 = total, $4 = severe
+            [ -f "$2" ] || return 0
+            printf '| %s | %s | %s |\n' "$1" "$3" "$4"
+          }
+          SARIF_ALL='[.runs[].results[]] | length'
+          SARIF_ERR='[.runs[].results[] | select(.level=="error")] | length'
+          # Opengrep leaves result.level empty and carries severity on the rule, so its
+          # ERROR count joins each result back to its rule's defaultConfiguration.level.
+          OG_ERR='[.runs[] | .tool.driver.rules as $r | .results[] | .ruleId as $id | select($r[] | select(.id==$id and .defaultConfiguration.level=="error"))] | length'
+          CDX_ALL='[.vulnerabilities[]?] | length'
+          CDX_SEV='[.vulnerabilities[]? | select(any(.ratings[]?; (.severity|ascii_downcase) as $s | $s=="critical" or $s=="high"))] | length'
+          ZEN_ALL='[.events[] | select(.type=="detected_attack")] | length'
+          ZAP_ALL='[.site[]?.alerts[]?] | length'
+          ZAP_SEV='[.site[]?.alerts[]? | select(.riskcode=="3" or .riskcode=="4")] | length'
+
+          {
+            echo "### TDxGuard — \`$PRODUCT\` @ \`$BRANCH\`"
+            echo
+            echo "| Scanner | Findings | Severe |"
+            echo "|---|---:|---:|"
+            row "Betterleaks (secrets)"  reports/betterleaks/betterleaks.json "$(count x reports/betterleaks/betterleaks.json "length")"      "$(count x reports/betterleaks/betterleaks.json "length")"
+            row "Opengrep (SAST)"        reports/opengrep/opengrep.sarif      "$(count x reports/opengrep/opengrep.sarif "$SARIF_ALL")"      "$(count x reports/opengrep/opengrep.sarif "$OG_ERR")"
+            row "Trivy (IaC)"            reports/trivy/trivy.sarif            "$(count x reports/trivy/trivy.sarif "$SARIF_ALL")"            "$(count x reports/trivy/trivy.sarif "$SARIF_ERR")"
+            row "Trivy (dependencies)"   reports/trivy/sbom.cdx.json          "$(count x reports/trivy/sbom.cdx.json "$CDX_ALL")"          "$(count x reports/trivy/sbom.cdx.json "$CDX_SEV")"
+            row "Trivy (image)"          reports/image/sbom-image.cdx.json    "$(count x reports/image/sbom-image.cdx.json "$CDX_ALL")"    "$(count x reports/image/sbom-image.cdx.json "$CDX_SEV")"
+            row "Trivy (image secrets)"  reports/image/trivy-image.sarif      "$(count x reports/image/trivy-image.sarif "$SARIF_ALL")"      "$(count x reports/image/trivy-image.sarif "$SARIF_ALL")"
+            row "Aikido Zen (IAST)"      reports/runtime/zen.json             "$(count x reports/runtime/zen.json "$ZEN_ALL")"             "$(count x reports/runtime/zen.json "$ZEN_ALL")"
+            row "ZAP (DAST)"             reports/runtime/zap.json             "$(count x reports/runtime/zap.json "$ZAP_ALL")"             "$(count x reports/runtime/zap.json "$ZAP_SEV")"
+            row "Nuclei (DAST)"          reports/runtime/nuclei.sarif         "$(count x reports/runtime/nuclei.sarif "$SARIF_ALL")"         "$(count x reports/runtime/nuclei.sarif "$SARIF_ERR")"
+            echo
+            echo "_Severe = secrets, ERROR level, CRITICAL/HIGH, or an attack reaching a sink._"
+            echo
+            if [ -n "${SECOBSERVE_UI_URL:-}" ]; then
+              PID=$(curl -sS -G "$SECOBSERVE_URL/api/products/" --data-urlencode "name=$PRODUCT" \
+                -H "Authorization: APIToken $SECOBSERVE_API_TOKEN" \
+                | jq -r --arg n "$PRODUCT" '.results[] | select(.name==$n) | .id' | head -1)
+              if [ -n "$PID" ]; then
+                echo "Details, triage and history: [$PRODUCT in TDxGuard]($SECOBSERVE_UI_URL/#/products/$PID/show)"
+              else
+                echo "Details in TDxGuard: $SECOBSERVE_UI_URL"
+              fi
+            else
+              echo "Details in TDxGuard (set SECOBSERVE_UI_URL in OpenBao for a direct link)."
+            fi
+          } > tdxguard-summary.md
+
+          cat tdxguard-summary.md >> "$GITHUB_STEP_SUMMARY"
+
+          # Sticky comment: find our own earlier comment by its marker and edit it.
+          if [ -n "${PR_NUMBER:-}" ]; then
+            MARK="<!-- tdxguard-summary -->"
+            { echo "$MARK"; cat tdxguard-summary.md; } > tdxguard-comment.md
+            CID=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" --paginate \
+              --jq ".[] | select(.body | startswith(\"$MARK\")) | .id" | head -1)
+            if [ -n "$CID" ]; then
+              gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$CID" -F body=@tdxguard-comment.md >/dev/null \
+                && echo "updated the pull request comment" || echo "::warning::Could not update the pull request comment"
+            else
+              gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" -F body=@tdxguard-comment.md >/dev/null \
+                && echo "posted the pull request comment" || echo "::warning::Could not post the pull request comment"
+            fi
+          fi
+
+      # A gate on the THRESHOLDS IN THE DASHBOARD rather than the ones hard-coded in this
+      # file. Every product has its own security_gate_threshold_critical/high/..., which
+      # the security team tunes per project without touching a pipeline. TDxGuard
+      # recalculates the value synchronously during the import, so reading it here gives
+      # an up-to-date answer.
+      #
+      # security_gate_passed: null = gate disabled, true = passed, false = failed.
+      - name: Check the product's security gate
+        if: inputs.security_gate
+        env:
+          PRODUCT: ${{ inputs.product }}
+        run: |
+          set -uo pipefail
+          PASSED=$(curl -sS -G "$SECOBSERVE_URL/api/products/" --data-urlencode "name=$PRODUCT" \
+            -H "Authorization: APIToken $SECOBSERVE_API_TOKEN" \
+            | jq -r --arg n "$PRODUCT" '.results[] | select(.name==$n) | .security_gate_passed' | head -1)
+          case "$PASSED" in
+            null) echo "Security gate: DISABLED for product $PRODUCT" ;;
+            true) echo "Security gate: PASSED" ;;
+            false)
+              echo "::error::Security gate: FAILED. Details in TDxGuard."
+              exit 1 ;;
+            *)
+              echo "::warning::Could not read the security gate of '$PRODUCT' (got: '$PASSED')" ;;
+          esac
