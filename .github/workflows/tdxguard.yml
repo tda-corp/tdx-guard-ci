@@ -523,7 +523,13 @@ jobs:
             RANGE="${{ github.event.pull_request.base.sha }}..HEAD"
           else
             BEFORE="${{ github.event.before }}"
-            if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+            # `before` is not always a commit this clone has: a force push leaves it
+            # pointing at history that no longer exists, and the range then fails with
+            # "Invalid revision range" — which betterleaks reports as a scan failure
+            # rather than as the bad input it is. Branch renames and garbage collection
+            # do the same. Check the object is really here before trusting it.
+            if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ] \
+               || ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
               # new branch or very first commit: scan the last commit only
               RANGE=$(git rev-parse HEAD~1 >/dev/null 2>&1 && echo "HEAD~1..HEAD" || echo "HEAD")
             else
