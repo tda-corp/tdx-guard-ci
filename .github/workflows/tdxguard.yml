@@ -26,6 +26,16 @@ on:
         required: false
         type: string
         default: "https://vault.tdadevelop.com"
+      runs_on:
+        description: >-
+          Runner label for every job in this pipeline. Defaults to GitHub-hosted, which is free on
+          public repositories and BILLED on private ones — a project that has its own runner should
+          say so here rather than spend the organisation's shared minutes. When those minutes run
+          out the symptom is not an error message: jobs are simply never assigned a runner and end
+          after two seconds looking like a failed scan.
+        required: false
+        type: string
+        default: "ubuntu-latest"
       fail_on_critical:
         description: "Fail the pipeline in the scan job itself when a severe vulnerability is found"
         required: false
@@ -124,7 +134,7 @@ jobs:
   # rather than being pasted into the three jobs that need it; the artifact costs a
   # few seconds against duplicating two hundred lines three times.
   tools:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runs_on }}
     steps:
       - name: Write the helper scripts
         run: |
@@ -506,7 +516,7 @@ jobs:
           retention-days: 1
 
   betterleaks:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runs_on }}
     steps:
       - uses: actions/checkout@v7
         with: { fetch-depth: 0 }
@@ -590,7 +600,7 @@ jobs:
   # the per-language directories; pointing it at the whole tree trips over a few invalid
   # community rule files and silently returns nothing.
   opengrep:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runs_on }}
     needs: [tools]
     env:
       OPENGREP_VERSION: "1.29.0"
@@ -650,7 +660,7 @@ jobs:
             || { echo "::error::Opengrep: ERROR severity findings present."; exit 1; }
 
   trivy:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runs_on }}
     needs: [tools]
     steps:
       - uses: actions/checkout@v7
@@ -716,7 +726,7 @@ jobs:
   #
   # The job only runs when the project declares image_ref.
   image_scan:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runs_on }}
     if: inputs.image_ref != ''
     steps:
       - uses: actions/checkout@v7
@@ -777,7 +787,7 @@ jobs:
   #
   # The job only runs when the project declares app_start_command.
   runtime:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runs_on }}
     needs: [tools]
     if: inputs.app_start_command != ''
     steps:
@@ -895,7 +905,7 @@ jobs:
           fi
 
   publish:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runs_on }}
     needs: [betterleaks, opengrep, trivy, image_scan, runtime]
     if: always()          # push the results to the dashboard even when a gate failed
     steps:
