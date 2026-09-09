@@ -33,6 +33,13 @@ on:
           say so here rather than spend the organisation's shared minutes. When those minutes run
           out the symptom is not an error message: jobs are simply never assigned a runner and end
           after two seconds looking like a failed scan.
+
+          WARNING — do not point this at a CONTAINERISED runner. The betterleaks and trivy jobs scan
+          through `docker run -v "$PWD:/src"`, and the Docker daemon resolves that path on the host
+          rather than inside the runner's container, so the mount arrives empty. betterleaks fails
+          loudly ("not a git repository"); trivy reports SUCCESS having scanned nothing
+          ("Number of language-specific files num=0"), which is a green security scan that never
+          read the code. tdx-scribe hit exactly this and went back to GitHub-hosted.
         required: false
         type: string
         default: "ubuntu-latest"
