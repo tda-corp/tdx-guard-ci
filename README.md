@@ -1,4 +1,4 @@
-# tdxguard-ci
+# tdx-guard-ci
 
 The reusable TDxGuard security pipeline for GitHub Actions.
 
