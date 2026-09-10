@@ -786,12 +786,22 @@ jobs:
       # Scan "." from the repo root so the file paths in the SARIF stay relative and the
       # source links in TDxGuard resolve. Opengrep then prefixes each rule id with the
       # --config path; the next step trims that.
+      # *.md and *.example are excluded because several security rules are plain regexes
+      # (detect-insecure-websocket is `languages: [regex]`, pattern `\bws:\/\/`), so they
+      # match prose and sample files as readily as code. Every one of the twelve findings
+      # this removes from tdx-scribe was `ws://` inside a README, a deployment guide or a
+      # .env.example -- and all twelve were ERROR severity, so they were gate material for
+      # documentation. Measured: 604 -> 592 findings, ERROR 80 -> 68.
+      #
+      # Secrets are not lost with them: Betterleaks reads every file type, including
+      # markdown, and does it against new commits where a leak actually matters.
       - name: Scan the source code (SAST)
         run: |
           ./opengrep scan --sarif --output opengrep.sarif --quiet \
             --config ogrules-security \
             --exclude=node_modules --exclude=.venv --exclude=vendor \
             --exclude=dist --exclude=build \
+            --exclude='*.md' --exclude='*.example' \
             --exclude=ogrules --exclude=ogrules-security . || true
       # SecObserve uses the rule id as the finding title, and Opengrep's id carries the
       # --config path ("ogrules.python.<rule>"). --rule-roots trims it to "python.<rule>".
@@ -815,6 +825,7 @@ jobs:
             --config ogrules-security \
             --exclude=node_modules --exclude=.venv --exclude=vendor \
             --exclude=dist --exclude=build \
+            --exclude='*.md' --exclude='*.example' \
             --exclude=ogrules --exclude=ogrules-security . \
             || { echo "::error::Opengrep: ERROR severity findings present."; exit 1; }
 
