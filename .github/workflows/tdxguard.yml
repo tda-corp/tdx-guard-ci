@@ -83,10 +83,12 @@ on:
           of a monorepo whose frontend builds from a subdirectory while the backend builds from the
           root. Without one, docker_context applies.
 
-          A heavy image does not belong on every push. Gate it on the branch from the caller, which
-          skips the job entirely everywhere else because the input arrives empty:
-
-            dockerfile: ${{ github.ref == 'refs/heads/main' && 'Dockerfile' || '' }}
+          A heavy image does not belong on every push. The caller can gate the value on the branch
+          with an expression, and the job is skipped everywhere else because the input arrives
+          empty — see examples/github-caller.yml for the exact line. (It is not written out here:
+          a ${} expression inside an input description is evaluated when the workflow is parsed,
+          and the github context is not available at that point, so the run fails with
+          startup_failure and no log at all.)
 
           Empty, with image_ref also empty, skips the image_scan job.
         required: false
