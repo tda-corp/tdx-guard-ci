@@ -78,14 +78,24 @@ on:
           scan finds what `trivy fs .` on the source tree cannot, namely the CVEs in the base image
           and in the OS packages installed into it.
 
-          For a project that builds several images, name them one per line.
+          For a project that builds several images, name them one per line. A line may carry its
+          own build context after the path — "web/marketing/Dockerfile web" — for the common case
+          of a monorepo whose frontend builds from a subdirectory while the backend builds from the
+          root. Without one, docker_context applies.
+
+          A heavy image does not belong on every push. Gate it on the branch from the caller, which
+          skips the job entirely everywhere else because the input arrives empty:
+
+            dockerfile: ${{ github.ref == 'refs/heads/main' && 'Dockerfile' || '' }}
 
           Empty, with image_ref also empty, skips the image_scan job.
         required: false
         type: string
         default: ""
       docker_context:
-        description: "Build context for every entry in dockerfile. Defaults to the repository root."
+        description: >-
+          Default build context for the dockerfile entries that do not name one of their own.
+          Defaults to the repository root.
         required: false
         type: string
         default: "."
@@ -923,10 +933,23 @@ jobs:
             # A here-string, not `printf ... | while`: a pipeline puts the loop in a
             # subshell, where the `exit 1` below would end the subshell and let the step
             # carry on reporting success for an image it never built.
-            while IFS= read -r DF; do
+            # Two fields per line: the Dockerfile, then optionally its own build context.
+            # A monorepo commonly needs both — the backend builds from the root while a
+            # frontend builds from the workspace subdirectory it lives in, and one shared
+            # context cannot be right for both.
+            # IFS is left at its default so the line splits into two fields; `IFS= read`
+            # would hand the whole line, context and all, to DF. The cost is that a path
+            # containing a space cannot be expressed, which is the right trade when
+            # whitespace is what separates the two fields.
+            while read -r DF CTX; do
               [ -n "$DF" ] || continue
+              CTX="${CTX:-$DOCKER_CONTEXT}"
               if [ ! -f "$DF" ]; then
                 echo "::error::dockerfile not found: $DF"
+                exit 1
+              fi
+              if [ ! -d "$CTX" ]; then
+                echo "::error::build context is not a directory: $CTX (for $DF)"
                 exit 1
               fi
               # One tag per Dockerfile, named after where it lives:
@@ -941,10 +964,10 @@ jobs:
                 | sed 's#^\./##; s#[^a-z0-9._-]#-#g; s#-*dockerfile##; s#^[.-]*##; s#[.-]*$##')
               [ -n "$SLUG" ] || SLUG=root
               TAG="tdxguard-scan/$SLUG:${{ github.sha }}"
-              echo "Building $TAG from $DF"
+              echo "Building $TAG from $DF (context $CTX)"
               # Unquoted on purpose: these are several arguments, not one.
               # shellcheck disable=SC2086
-              docker build -f "$DF" -t "$TAG" $DOCKER_BUILD_ARGS "$DOCKER_CONTEXT"
+              docker build -f "$DF" -t "$TAG" $DOCKER_BUILD_ARGS "$CTX"
               printf '%s\t%s\n' "$TAG" "$SLUG" >> images.txt
             done <<< "$DOCKERFILES"
           fi
