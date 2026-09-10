@@ -45,6 +45,29 @@ on:
         required: false
         type: string
         default: "self-hosted"
+      dashboard_all_branches:
+        description: >-
+          Push results from EVERY branch to TDxGuard, not just the default one.
+
+          Off by default, and the reason is duplication. A dependency lives in every branch, so a
+          CVE in it is reported once per branch: CVE-2026-13697 in undici was filed against eleven
+          branches of tdx-scribe, one issue rendered as eleven rows. Measured across the whole
+          dashboard, tdx-scribe held 19,441 open findings that were 303 distinct issues, and
+          tdx-identity 11,991 that were 41. Worse than the noise, an assessment made on one branch
+          left the other ten untouched, so triage never finished.
+
+          Turning this off costs nothing a pull request relies on. The scans still run, the gate
+          still fails the build, and the summary comment is still posted -- that comment is built
+          from the SARIF files in the job, not read back from the dashboard. The product-level
+          security gate is unaffected either way, because check_security_gate only ever ran for the
+          default branch.
+
+          What it does cost: the dashboard can no longer answer "what did PR #208 introduce". The
+          pull request's own comment answers that, and once the branch is merged the default
+          branch's scan reports it anyway.
+        required: false
+        type: boolean
+        default: false
       fail_on_critical:
         description: "Fail the pipeline in the scan job itself when a severe vulnerability is found"
         required: false
@@ -1295,7 +1318,14 @@ jobs:
           UI=$(echo "$RESP" | jq -r '.data.data.SECOBSERVE_UI_URL // empty')
           echo "SECOBSERVE_UI_URL=$UI" >> "$GITHUB_ENV"
 
+      # Only the default branch is written to the dashboard unless the project asks
+      # otherwise. See the dashboard_all_branches input for why. The steps AFTER this one
+      # are deliberately not gated: the pull request comment and the security gate must
+      # work on every branch.
       - name: Push the results to SecObserve
+        if: >-
+          inputs.dashboard_all_branches
+          || github.ref_name == github.event.repository.default_branch
         env:
           PRODUCT: ${{ inputs.product }}
           ZAP_TARGET: ${{ inputs.zap_target }}
