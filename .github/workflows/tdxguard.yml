@@ -28,21 +28,23 @@ on:
         default: "https://vault.tdadevelop.com"
       runs_on:
         description: >-
-          Runner label for every job in this pipeline. Defaults to GitHub-hosted, which is free on
-          public repositories and BILLED on private ones — a project that has its own runner should
-          say so here rather than spend the organisation's shared minutes. When those minutes run
-          out the symptom is not an error message: jobs are simply never assigned a runner and end
-          after two seconds looking like a failed scan.
+          Runner label for every job in this pipeline. Defaults to our own runners, because on a
+          private repository GitHub-hosted minutes are billed, and when that bill goes unpaid the
+          symptom is not an error message: jobs are never assigned a runner and end after two
+          seconds with no log at all, which reads exactly like a failed scan.
 
-          WARNING — do not point this at a CONTAINERISED runner. The betterleaks and trivy jobs scan
-          through `docker run -v "$PWD:/src"`, and the Docker daemon resolves that path on the host
-          rather than inside the runner's container, so the mount arrives empty. betterleaks fails
-          loudly ("not a git repository"); trivy reports SUCCESS having scanned nothing
-          ("Number of language-specific files num=0"), which is a green security scan that never
-          read the code. tdx-scribe hit exactly this and went back to GitHub-hosted.
+          Any runner will do, containerised included. That was not always true. Every scanner used
+          to run as a sibling container with the workspace bind-mounted (`docker run -v
+          "$PWD:/src"`), and the Docker daemon resolves that path on the HOST — so inside a
+          containerised runner the mount arrived empty. betterleaks failed loudly ("not a git
+          repository") and, far worse, trivy reported SUCCESS having scanned nothing ("Number of
+          language-specific files num=0"). The scanners now run as pinned, checksum-verified static
+          binaries on the runner itself, so there is no mount left to get wrong.
+
+          Set "ubuntu-latest" to go back to GitHub-hosted.
         required: false
         type: string
-        default: "ubuntu-latest"
+        default: "self-hosted"
       fail_on_critical:
         description: "Fail the pipeline in the scan job itself when a severe vulnerability is found"
         required: false
@@ -67,13 +69,46 @@ on:
         required: false
         type: boolean
         default: false
+      dockerfile:
+        description: >-
+          Dockerfile to build and scan, e.g. docker/backend/Dockerfile. The image is built into a
+          throwaway local tag and never pushed, which is what makes the image scan runnable on
+          every push and pull request: it does not have to wait for a publish pipeline, and there
+          is no registry tag that might not exist yet. This is the input to reach for — an image
+          scan finds what `trivy fs .` on the source tree cannot, namely the CVEs in the base image
+          and in the OS packages installed into it.
+
+          For a project that builds several images, name them one per line.
+
+          Empty, with image_ref also empty, skips the image_scan job.
+        required: false
+        type: string
+        default: ""
+      docker_context:
+        description: "Build context for every entry in dockerfile. Defaults to the repository root."
+        required: false
+        type: string
+        default: "."
+      docker_build_args:
+        description: >-
+          Extra arguments passed to every `docker build`, e.g. "--target runtime --build-arg
+          VERSION=ci". Do not put credentials here; the command line is visible in the log.
+        required: false
+        type: string
+        default: ""
       image_ref:
-        description: "Image to scan, e.g. ghcr.io/tda-corp/app:sha-abc123. Empty skips the image_scan job."
+        description: >-
+          Scan an image that ALREADY exists in a registry instead of building one, e.g.
+          ghcr.io/tda-corp/app:sha-abc123. Only fits a run guaranteed to happen after the publish
+          pipeline: on any other commit the tag does not exist yet and the job fails for a reason
+          that has nothing to do with security. Prefer dockerfile.
         required: false
         type: string
         default: ""
       image_build_command:
-        description: "Command that builds the image. Empty means the image is already in a registry."
+        description: >-
+          Command that builds image_ref, for a project whose image needs more than `docker build`.
+          Ignored when dockerfile is set.
         required: false
         type: string
         default: ""
@@ -143,6 +178,20 @@ jobs:
   tools:
     runs-on: ${{ inputs.runs_on }}
     steps:
+      # A self-hosted runner is whatever the platform team installed on it, not the
+      # generously stocked GitHub-hosted image. Name what this job needs up front: a
+      # missing tool then says so in one line instead of surfacing as a scan that found
+      # nothing, which is the failure this pipeline has already been bitten by twice.
+      - name: Check the runner has what this job needs
+        run: |
+          MISSING=""
+          for T in python3; do
+            command -v "$T" >/dev/null 2>&1 || MISSING="$MISSING $T"
+          done
+          if [ -n "$MISSING" ]; then
+            echo "::error::Runner '${RUNNER_NAME:-?}' is missing:$MISSING"
+            exit 1
+          fi
       - name: Write the helper scripts
         run: |
           cat > sarif-enrich.py <<'TDXGUARD_SCRIPT_EOF'
@@ -524,9 +573,45 @@ jobs:
 
   betterleaks:
     runs-on: ${{ inputs.runs_on }}
+    env:
+      BETTERLEAKS_VERSION: "1.8.1"
     steps:
       - uses: actions/checkout@v7
         with: { fetch-depth: 0 }
+
+      - name: Check the runner has what this job needs
+        run: |
+          MISSING=""
+          for T in git curl tar jq sha256sum; do
+            command -v "$T" >/dev/null 2>&1 || MISSING="$MISSING $T"
+          done
+          if [ -n "$MISSING" ]; then
+            echo "::error::Runner '${RUNNER_NAME:-?}' is missing:$MISSING"
+            exit 1
+          fi
+
+      # The static binary, not the container image. Betterleaks used to run as a sibling
+      # container with the workspace bind-mounted, and the Docker daemon resolves that
+      # path on the HOST — so on a containerised runner the mount arrived empty and the
+      # scan read nothing. A binary on the runner has no such gap between what the job
+      # checked out and what the scanner sees.
+      - name: Fetch Betterleaks (pinned binary)
+        run: |
+          case "$(uname -m)" in
+            x86_64)        ARCH=x64 ;;
+            aarch64|arm64) ARCH=arm64 ;;
+            *) echo "::error::Betterleaks publishes no binary for $(uname -m)"; exit 1 ;;
+          esac
+          BASE="https://github.com/betterleaks/betterleaks/releases/download/v$BETTERLEAKS_VERSION"
+          TARBALL="betterleaks_${BETTERLEAKS_VERSION}_linux_${ARCH}.tar.gz"
+          curl -sSfL --retry 3 -o "$RUNNER_TEMP/$TARBALL" "$BASE/$TARBALL"
+          # Verify the checksum the release publishes. Without it a truncated or swapped
+          # download becomes a scan that quietly finds nothing, which is the failure mode
+          # this whole job is meant to avoid.
+          curl -sSfL --retry 3 -o "$RUNNER_TEMP/checksums.txt" "$BASE/checksums.txt"
+          (cd "$RUNNER_TEMP" && grep " $TARBALL$" checksums.txt | sha256sum -c -)
+          tar -xzf "$RUNNER_TEMP/$TARBALL" -C "$RUNNER_TEMP" betterleaks
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
 
       # IMPORTANT: scan only the NEW COMMITS, never the whole history.
       # Git history is immutable: a repository that ever had a finding (a false positive
@@ -570,20 +655,14 @@ jobs:
           # absent, and the step runs under `bash -e`. Most repositories have no
           # .gitleaks.toml, so the && form failed the job for nearly everyone.
           CFG=""
-          if [ -f .gitleaks.toml ]; then CFG="-c /repo/.gitleaks.toml"; fi
-          # git refuses to read a repository owned by another user ("detected dubious
-          # ownership"), and the container's user is not the runner's. Left unset,
-          # betterleaks scans nothing and still prints "no leaks found" — a clean bill
-          # of health for a scan that never happened, which is worse than an error.
-          docker run --rm -v "$PWD:/repo" \
-            -e GIT_CONFIG_COUNT=1 \
-            -e GIT_CONFIG_KEY_0=safe.directory \
-            -e GIT_CONFIG_VALUE_0=/repo \
-            ghcr.io/betterleaks/betterleaks:v1.8.1 \
-            git /repo \
+          if [ -f .gitleaks.toml ]; then CFG="-c .gitleaks.toml"; fi
+          # The GIT_CONFIG safe.directory dance that used to be here is gone with the
+          # container: the scan and the checkout now run as the same user, so git has no
+          # reason to call the repository dubious and refuse to read it.
+          betterleaks git . \
             --log-opts="${{ steps.range.outputs.value }}" \
             $CFG \
-            -f json -r /repo/betterleaks.json \
+            -f json -r betterleaks.json \
             --exit-code 0 --redact --no-banner
       - uses: actions/upload-artifact@v7
         if: always()
@@ -592,6 +671,7 @@ jobs:
       - name: Fail on committed secrets
         if: inputs.fail_on_critical
         run: |
+          # `jq length` reads 0 from both shapes a clean scan produces: [] and null.
           COUNT=$(jq 'length' betterleaks.json)
           if [ "$COUNT" -ne 0 ]; then
             echo "::error::Found $COUNT committed secret(s). Details in TDxGuard."
@@ -616,6 +696,16 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with: { name: tdxguard-tools }
+      - name: Check the runner has what this job needs
+        run: |
+          MISSING=""
+          for T in curl tar python3; do
+            command -v "$T" >/dev/null 2>&1 || MISSING="$MISSING $T"
+          done
+          if [ -n "$MISSING" ]; then
+            echo "::error::Runner '${RUNNER_NAME:-?}' is missing:$MISSING"
+            exit 1
+          fi
       - name: Fetch Opengrep and its rules (pinned)
         run: |
           curl -sSfL -o opengrep \
@@ -669,10 +759,48 @@ jobs:
   trivy:
     runs-on: ${{ inputs.runs_on }}
     needs: [tools]
+    env:
+      TRIVY_VERSION: "0.74.0"
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with: { name: tdxguard-tools }
+
+      - name: Check the runner has what this job needs
+        run: |
+          MISSING=""
+          for T in curl tar python3 sha256sum; do
+            command -v "$T" >/dev/null 2>&1 || MISSING="$MISSING $T"
+          done
+          if [ -n "$MISSING" ]; then
+            echo "::error::Runner '${RUNNER_NAME:-?}' is missing:$MISSING"
+            exit 1
+          fi
+
+      # Trivy as a pinned binary rather than aquasec/trivy with the workspace bind-mounted.
+      # The mount was the bug: the Docker daemon resolves `-v "$PWD:/src"` on the HOST, so
+      # on a containerised runner trivy received an empty directory, found nothing in it,
+      # and exited 0 — "Number of language-specific files num=0" and a green pipeline that
+      # had not read a line of the code.
+      #
+      # 0.58.1 is not the pinned version any more: Aqua has deleted the release assets for
+      # it, so there is no binary left to download. 0.74.0 is the version this was verified
+      # against — SARIF and CycloneDX both parse, and CycloneDX 1.7 is accepted (SecObserve
+      # keys off bomFormat, not the spec version).
+      - name: Fetch Trivy (pinned binary)
+        run: |
+          case "$(uname -m)" in
+            x86_64)        ARCH=64bit ;;
+            aarch64|arm64) ARCH=ARM64 ;;
+            *) echo "::error::Trivy publishes no binary for $(uname -m)"; exit 1 ;;
+          esac
+          BASE="https://github.com/aquasecurity/trivy/releases/download/v$TRIVY_VERSION"
+          TARBALL="trivy_${TRIVY_VERSION}_Linux-${ARCH}.tar.gz"
+          curl -sSfL --retry 3 -o "$RUNNER_TEMP/$TARBALL" "$BASE/$TARBALL"
+          curl -sSfL --retry 3 -o "$RUNNER_TEMP/trivy-checksums.txt" "$BASE/trivy_${TRIVY_VERSION}_checksums.txt"
+          (cd "$RUNNER_TEMP" && grep " $TARBALL$" trivy-checksums.txt | sha256sum -c -)
+          tar -xzf "$RUNNER_TEMP/$TARBALL" -C "$RUNNER_TEMP" trivy
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
       # Trivy's SARIF carries ONLY the misconfigurations (IaC). The vulnerabilities travel
       # through CycloneDX instead.
       #
@@ -682,8 +810,7 @@ jobs:
       # empty vulnerability_id, no CVSS, no EPSS and no component.
       - name: Scan dependencies and infrastructure
         run: |
-          docker run --rm -v "$PWD:/src" -w /src aquasec/trivy:0.58.1 \
-            fs . --scanners misconfig --format sarif --output trivy.sarif \
+          trivy fs . --scanners misconfig --format sarif --output trivy.sarif \
             --skip-dirs node_modules --skip-dirs .venv --skip-dirs vendor
       # CycloneDX carries BOTH the components AND the vulnerabilities, so this single file
       # replaces what used to be two paths (a separate SBOM plus an OSV scan for the CVEs).
@@ -691,17 +818,17 @@ jobs:
       # about it, but still writes a perfectly valid file.
       - name: Generate the SBOM including vulnerabilities
         run: |
-          docker run --rm -v "$PWD:/src" -w /src aquasec/trivy:0.58.1 \
-            fs . --format cyclonedx --scanners vuln --output sbom.cdx.json \
+          trivy fs . --format cyclonedx --scanners vuln --output sbom.cdx.json \
             --skip-dirs node_modules --skip-dirs .venv --skip-dirs vendor
-      # Trivy 0.58.x renders its SARIF through html/template, so quotes arrive escaped
-      # ("&#39;apt-get&#39;...") and no snippet is included. Normalize before uploading.
-      # Trivy runs as root inside its container, so the files it writes are root-owned
-      # and the enrich step below, running as the runner user, gets EACCES trying to
-      # rewrite them in place.
-      - name: Take ownership of Trivy's output
-        run: sudo chown "$(id -u):$(id -g)" trivy.sarif sbom.cdx.json 2>/dev/null || true
-
+      # Trivy reports line numbers but no code snippet, so the enrich step embeds one.
+      #
+      # --unescape-html is kept for the older-Trivy case only: 0.58.x rendered its SARIF
+      # through html/template and a title arrived as "&#39;apt-get&#39; missing ...".
+      # 0.74.0 does not, and unescaping text that holds no entities changes nothing.
+      #
+      # The `sudo chown` that used to stand here is gone with the container: trivy ran as
+      # root inside it and left root-owned files that this step could not rewrite. It also
+      # assumed a passwordless sudo, which a self-hosted runner does not owe anyone.
       - name: Normalize the SARIF (unescape HTML, embed snippets)
         run: |
           python3 sarif-enrich.py trivy.sarif . --unescape-html
@@ -718,9 +845,9 @@ jobs:
       - name: Fail on fixable CRITICAL/HIGH vulnerabilities
         if: inputs.fail_on_critical
         run: |
-          docker run --rm -v "$PWD:/src" -w /src aquasec/trivy:0.58.1 \
-            fs . --scanners vuln,misconfig --severity CRITICAL,HIGH \
-            --ignore-unfixed --exit-code 1
+          trivy fs . --scanners vuln,misconfig --severity CRITICAL,HIGH \
+            --ignore-unfixed --exit-code 1 \
+            --skip-dirs node_modules --skip-dirs .venv --skip-dirs vendor
 
   # Scan the built image — the OS packages and libraries that live INSIDE it, which
   # `trivy fs .` on the source tree never sees: a stale base image, apt/apk packages
@@ -731,48 +858,136 @@ jobs:
   # image SBOM live side by side — under the same file name the later one wipes the
   # earlier one.
   #
-  # The job only runs when the project declares image_ref.
+  # The job runs when the project declares dockerfile (built here, scanned here, never
+  # pushed) or image_ref (already in a registry). Declaring neither skips it — which is
+  # why, for a long time, no project in the organisation had an image scanned at all
+  # despite every one of them publishing images: image_ref was the only way in, and it
+  # only works on the commits a publish pipeline has already tagged.
   image_scan:
     runs-on: ${{ inputs.runs_on }}
-    if: inputs.image_ref != ''
+    if: inputs.dockerfile != '' || inputs.image_ref != ''
+    env:
+      TRIVY_VERSION: "0.74.0"
     steps:
       - uses: actions/checkout@v7
 
-      - name: Build the image
-        if: inputs.image_build_command != ''
+      - name: Check the runner has what this job needs
+        run: |
+          MISSING=""
+          for T in docker curl tar sha256sum; do
+            command -v "$T" >/dev/null 2>&1 || MISSING="$MISSING $T"
+          done
+          if [ -n "$MISSING" ]; then
+            echo "::error::Runner '${RUNNER_NAME:-?}' is missing:$MISSING"
+            exit 1
+          fi
+
+      # Same pinned binary as the trivy job. Trivy talks to the Docker daemon directly,
+      # so the image it inspects is the one the daemon holds, whether the runner is
+      # containerised or not — no bind mount, no path to resolve on the wrong side.
+      - name: Fetch Trivy (pinned binary)
+        run: |
+          case "$(uname -m)" in
+            x86_64)        ARCH=64bit ;;
+            aarch64|arm64) ARCH=ARM64 ;;
+            *) echo "::error::Trivy publishes no binary for $(uname -m)"; exit 1 ;;
+          esac
+          BASE="https://github.com/aquasecurity/trivy/releases/download/v$TRIVY_VERSION"
+          TARBALL="trivy_${TRIVY_VERSION}_Linux-${ARCH}.tar.gz"
+          curl -sSfL --retry 3 -o "$RUNNER_TEMP/$TARBALL" "$BASE/$TARBALL"
+          curl -sSfL --retry 3 -o "$RUNNER_TEMP/trivy-checksums.txt" "$BASE/trivy_${TRIVY_VERSION}_checksums.txt"
+          (cd "$RUNNER_TEMP" && grep " $TARBALL$" trivy-checksums.txt | sha256sum -c -)
+          tar -xzf "$RUNNER_TEMP/$TARBALL" -C "$RUNNER_TEMP" trivy
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+      # Decide, once, which images this run scans, and write the list where the later
+      # steps read it. One line per image so a project with a backend and a frontend gets
+      # both — each under its own file name, since TDxGuard groups components by
+      # (product, branch, upload_filename) and a shared name means the second upload
+      # erases the first.
+      - name: Work out which images to scan
+        id: images
         env:
+          DOCKERFILES: ${{ inputs.dockerfile }}
+          DOCKER_CONTEXT: ${{ inputs.docker_context }}
+          DOCKER_BUILD_ARGS: ${{ inputs.docker_build_args }}
+          IMAGE_REF: ${{ inputs.image_ref }}
           IMAGE_BUILD_COMMAND: ${{ inputs.image_build_command }}
-        run: sh -c "$IMAGE_BUILD_COMMAND"
-
-      - name: Generate the image SBOM including vulnerabilities
-        env:
-          IMAGE_REF: ${{ inputs.image_ref }}
         run: |
-          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
-            -v "$PWD:/out" aquasec/trivy:0.58.1 \
-            image --format cyclonedx --scanners vuln \
-            --output /out/sbom-image.cdx.json "$IMAGE_REF"
+          : > images.txt
+          if [ -n "$DOCKERFILES" ]; then
+            # `docker build` streams its context to the daemon over the API instead of
+            # asking it to open a path, so it works on a containerised runner exactly as
+            # it does on a host one. This is why building here is sound where mounting
+            # was not.
+            # A here-string, not `printf ... | while`: a pipeline puts the loop in a
+            # subshell, where the `exit 1` below would end the subshell and let the step
+            # carry on reporting success for an image it never built.
+            while IFS= read -r DF; do
+              [ -n "$DF" ] || continue
+              if [ ! -f "$DF" ]; then
+                echo "::error::dockerfile not found: $DF"
+                exit 1
+              fi
+              # One tag per Dockerfile, named after where it lives:
+              #   docker/backend/Dockerfile -> docker-backend
+              #   Dockerfile                -> root
+              #   ./Dockerfile.prod         -> prod
+              # Lowercased because Docker rejects an uppercase repository name outright
+              # ("repository name must be lowercase"), which a path like Deploy/Dockerfile
+              # would otherwise walk straight into.
+              SLUG=$(printf '%s' "$DF" \
+                | tr '[:upper:]' '[:lower:]' \
+                | sed 's#^\./##; s#[^a-z0-9._-]#-#g; s#-*dockerfile##; s#^[.-]*##; s#[.-]*$##')
+              [ -n "$SLUG" ] || SLUG=root
+              TAG="tdxguard-scan/$SLUG:${{ github.sha }}"
+              echo "Building $TAG from $DF"
+              # Unquoted on purpose: these are several arguments, not one.
+              # shellcheck disable=SC2086
+              docker build -f "$DF" -t "$TAG" $DOCKER_BUILD_ARGS "$DOCKER_CONTEXT"
+              printf '%s\t%s\n' "$TAG" "$SLUG" >> images.txt
+            done <<< "$DOCKERFILES"
+          fi
+          if [ -n "$IMAGE_REF" ]; then
+            if [ -n "$IMAGE_BUILD_COMMAND" ] && [ -z "$DOCKERFILES" ]; then
+              sh -c "$IMAGE_BUILD_COMMAND"
+            fi
+            printf '%s\t%s\n' "$IMAGE_REF" "registry" >> images.txt
+          fi
+          echo "--- images to scan ---"
+          cat images.txt
 
-      - name: Scan for secrets baked into the image
-        env:
-          IMAGE_REF: ${{ inputs.image_ref }}
+      # Two reports per image: the CycloneDX SBOM carries the components AND their CVEs
+      # (the base image's OS packages, which `trivy fs .` on the source tree never sees),
+      # the SARIF carries secrets baked into the layers — an .env or a private key copied
+      # in during the build and not deleted.
+      - name: Scan the images
         run: |
-          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
-            -v "$PWD:/out" aquasec/trivy:0.58.1 \
-            image --scanners secret --format sarif --output /out/trivy-image.sarif "$IMAGE_REF"
+          while IFS="$(printf '\t')" read -r REF SLUG; do
+            [ -n "$REF" ] || continue
+            echo "::group::$REF"
+            trivy image --format cyclonedx --scanners vuln \
+              --output "sbom-image-$SLUG.cdx.json" "$REF"
+            trivy image --scanners secret --format sarif \
+              --output "trivy-image-$SLUG.sarif" "$REF"
+            echo "::endgroup::"
+          done < images.txt
 
+      # The refs travel to the publish job so each report reaches TDxGuard tagged with the
+      # image it came from. The locally built tag is the honest answer for a built image:
+      # nothing was pushed, so there is no registry reference to claim.
       - uses: actions/upload-artifact@v7
         if: always()
-        with: { name: image, path: "sbom-image.cdx.json\ntrivy-image.sarif" }
+        with: { name: image, path: "sbom-image-*.cdx.json\ntrivy-image-*.sarif\nimages.txt" }
 
       - name: Fail on fixable CRITICAL/HIGH vulnerabilities in the image
         if: inputs.fail_on_critical
-        env:
-          IMAGE_REF: ${{ inputs.image_ref }}
         run: |
-          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
-            aquasec/trivy:0.58.1 image --scanners vuln \
-            --severity CRITICAL,HIGH --ignore-unfixed --exit-code 1 "$IMAGE_REF"
+          while IFS="$(printf '\t')" read -r REF _; do
+            [ -n "$REF" ] || continue
+            trivy image --scanners vuln --severity CRITICAL,HIGH \
+              --ignore-unfixed --exit-code 1 "$REF"
+          done < images.txt
 
   # IAST + DAST — start the application ONCE, collect two kinds of result.
   #
@@ -797,10 +1012,23 @@ jobs:
     runs-on: ${{ inputs.runs_on }}
     needs: [tools]
     if: inputs.app_start_command != ''
+    env:
+      NUCLEI_VERSION: "3.4.10"
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with: { name: tdxguard-tools }
+
+      - name: Check the runner has what this job needs
+        run: |
+          MISSING=""
+          for T in python3 curl jq docker unzip; do
+            command -v "$T" >/dev/null 2>&1 || MISSING="$MISSING $T"
+          done
+          if [ -n "$MISSING" ]; then
+            echo "::error::Runner '${RUNNER_NAME:-?}' is missing:$MISSING"
+            exit 1
+          fi
 
       - name: Install the application's dependencies
         if: inputs.app_setup_command != ''
@@ -847,31 +1075,50 @@ jobs:
                 full) ZAP_SCRIPT=zap-full-scan.py ;;
                 *)    ZAP_SCRIPT=zap-baseline.py ;;
               esac
-              # The output directory has to be 777: ZAP runs as uid 1000 (user zap) inside
-              # its container while the runner's workspace belongs to uid 1001, so writing
-              # straight into $PWD fails with a permission error.
-              mkdir -p zap-out && chmod 777 zap-out
+              # ZAP stays a container — it is a large Java application with no usable
+              # standalone binary — but its report is fetched with `docker cp` instead of a
+              # bind mount. `docker cp` goes through the API, so it does not care whose
+              # filesystem $PWD names; a mount does, which is why the mounted variant read
+              # and wrote nothing on a containerised runner. It also disposes of the old
+              # chmod 777 workaround for ZAP running as uid 1000 against a workspace owned
+              # by another uid.
+              #
               # --network host: ZAP runs in a container, the application runs on the runner.
               # -I: warnings do not make ZAP exit non-zero, the gate lives in TDxGuard.
-              docker run --rm --network host -v "$PWD/zap-out:/zap/wrk:rw" \
+              docker rm -f tdxguard-zap >/dev/null 2>&1 || true
+              docker run --name tdxguard-zap --network host \
                 ghcr.io/zaproxy/zaproxy:2.16.1 \
                 "$ZAP_SCRIPT" -t "$ZAP_TARGET" -J zap.json -I \
                 || echo "::warning::ZAP exited with an error."
-              [ -f zap-out/zap.json ] && mv zap-out/zap.json zap.json
+              docker cp tdxguard-zap:/zap/wrk/zap.json zap.json \
+                || echo "::warning::ZAP wrote no report."
+              docker rm -f tdxguard-zap >/dev/null 2>&1 || true
 
               if [ "$NUCLEI" = "true" ]; then
                 # Nuclei writes SARIF natively (-sarif-export), so it travels the same path
                 # as Opengrep and Trivy: annotations on the diff and the SARIF parser.
-                # The image ships no templates: it downloads them on first run (~1 minute).
+                # It ships no templates: they are downloaded on first run (~1 minute).
                 # Do NOT add -disable-update-check, that leaves it with nothing to run.
-                mkdir -p nuclei-out && chmod 777 nuclei-out
-                docker run --rm --network host -v "$PWD/nuclei-out:/out" \
-                  projectdiscovery/nuclei:v3.4.10 \
+                #
+                # The pinned binary rather than the image, for the same reason as the other
+                # scanners: no bind mount to resolve on the wrong host.
+                case "$(uname -m)" in
+                  x86_64)        NARCH=amd64 ;;
+                  aarch64|arm64) NARCH=arm64 ;;
+                  *) echo "::error::Nuclei publishes no binary for $(uname -m)"; exit 1 ;;
+                esac
+                NBASE="https://github.com/projectdiscovery/nuclei/releases/download/v$NUCLEI_VERSION"
+                NZIP="nuclei_${NUCLEI_VERSION}_linux_${NARCH}.zip"
+                curl -sSfL --retry 3 -o "$RUNNER_TEMP/$NZIP" "$NBASE/$NZIP"
+                curl -sSfL --retry 3 -o "$RUNNER_TEMP/nuclei-checksums.txt" \
+                  "$NBASE/nuclei_${NUCLEI_VERSION}_checksums.txt"
+                (cd "$RUNNER_TEMP" && grep " $NZIP$" nuclei-checksums.txt | sha256sum -c -)
+                unzip -oq "$RUNNER_TEMP/$NZIP" nuclei -d "$RUNNER_TEMP"
+                "$RUNNER_TEMP/nuclei" \
                   -target "$ZAP_TARGET" -severity low,medium,high,critical \
-                  -sarif-export /out/nuclei.sarif -no-interactsh -silent \
+                  -sarif-export nuclei.sarif -no-interactsh -silent \
                   || echo "::warning::Nuclei exited with an error."
-                if [ -f nuclei-out/nuclei.sarif ]; then
-                  mv nuclei-out/nuclei.sarif nuclei.sarif
+                if [ -f nuclei.sarif ]; then
                   # Nuclei stamps kind "open" on every match, and SecObserve imports only
                   # kind "fail" (SARIF §3.27.9). Without this the upload returns HTTP 200
                   # with zero observations — a silent loss. Verified on a real scan.
@@ -919,6 +1166,17 @@ jobs:
       - uses: actions/download-artifact@v8
         with: { path: reports }
 
+      - name: Check the runner has what this job needs
+        run: |
+          MISSING=""
+          for T in curl jq; do
+            command -v "$T" >/dev/null 2>&1 || MISSING="$MISSING $T"
+          done
+          if [ -n "$MISSING" ]; then
+            echo "::error::Runner '${RUNNER_NAME:-?}' is missing:$MISSING"
+            exit 1
+          fi
+
       - name: Fetch the SecObserve token from OpenBao (no static secret)
         env:
           BAO_ADDR: ${{ inputs.bao_addr }}
@@ -951,7 +1209,6 @@ jobs:
       - name: Push the results to SecObserve
         env:
           PRODUCT: ${{ inputs.product }}
-          IMAGE_REF: ${{ inputs.image_ref }}
           ZAP_TARGET: ${{ inputs.zap_target }}
         run: |
           set -uo pipefail
@@ -983,14 +1240,24 @@ jobs:
           }
           # parser_name is stated explicitly rather than left to auto-detection: several
           # parsers accept a SARIF file, and they are tried in alphabetical order.
-          # Betterleaks writes [] when clean, which the Betterleaks parser rejects; skip
+          # Betterleaks writes null or [] when clean, which its parser rejects; skip
           # it. An empty new-commit scan does not mean an old secret in history is gone.
           if [ -f reports/betterleaks/betterleaks.json ] && [ "$(jq 'length' reports/betterleaks/betterleaks.json)" -gt 0 ]; then
             upload reports/betterleaks/betterleaks.json "parser_name=Betterleaks"
           fi
           upload reports/opengrep/opengrep.sarif "parser_name=SARIF"
           upload reports/trivy/trivy.sarif "parser_name=SARIF"
-          upload reports/image/trivy-image.sarif "parser_name=SARIF" "docker_image_name_tag=$IMAGE_REF"
+          # The image job scans one image per Dockerfile and records "<ref><TAB><slug>" per
+          # line, so both of its reports are pushed per image with the ref they came from.
+          # Reading the list beats guessing from inputs.image_ref, which is empty whenever
+          # the image was built here rather than pulled.
+          if [ -f reports/image/images.txt ]; then
+            while IFS="$(printf '\t')" read -r REF SLUG; do
+              [ -n "$REF" ] || continue
+              upload "reports/image/trivy-image-$SLUG.sarif" \
+                "parser_name=SARIF" "docker_image_name_tag=$REF"
+            done < reports/image/images.txt
+          fi
           # No endpoint_url for zen.json: the parser derives one per route (/users), and
           # the form field would overwrite it with the bare target.
           upload reports/runtime/zen.json "parser_name=Aikido Zen"
@@ -1006,8 +1273,13 @@ jobs:
           # docker_image_name_tag, the sbom endpoint does not — which is how the image's
           # CVEs end up attached to the right image.
           upload reports/trivy/sbom.cdx.json "parser_name=CycloneDX"
-          upload reports/image/sbom-image.cdx.json "parser_name=CycloneDX" \
-            "docker_image_name_tag=$IMAGE_REF"
+          if [ -f reports/image/images.txt ]; then
+            while IFS="$(printf '\t')" read -r REF SLUG; do
+              [ -n "$REF" ] || continue
+              upload "reports/image/sbom-image-$SLUG.cdx.json" \
+                "parser_name=CycloneDX" "docker_image_name_tag=$REF"
+            done < reports/image/images.txt
+          fi
 
           # No OSV scan here. Trivy's CycloneDX already carries the CVEs, and running
           # OSV on top reported the very same CVEs a second time — every one of them
@@ -1056,8 +1328,17 @@ jobs:
             row "Opengrep (SAST)"        reports/opengrep/opengrep.sarif      "$(count x reports/opengrep/opengrep.sarif "$SARIF_ALL")"      "$(count x reports/opengrep/opengrep.sarif "$OG_ERR")"
             row "Trivy (IaC)"            reports/trivy/trivy.sarif            "$(count x reports/trivy/trivy.sarif "$SARIF_ALL")"            "$(count x reports/trivy/trivy.sarif "$SARIF_ERR")"
             row "Trivy (dependencies)"   reports/trivy/sbom.cdx.json          "$(count x reports/trivy/sbom.cdx.json "$CDX_ALL")"          "$(count x reports/trivy/sbom.cdx.json "$CDX_SEV")"
-            row "Trivy (image)"          reports/image/sbom-image.cdx.json    "$(count x reports/image/sbom-image.cdx.json "$CDX_ALL")"    "$(count x reports/image/sbom-image.cdx.json "$CDX_SEV")"
-            row "Trivy (image secrets)"  reports/image/trivy-image.sarif      "$(count x reports/image/trivy-image.sarif "$SARIF_ALL")"      "$(count x reports/image/trivy-image.sarif "$SARIF_ALL")"
+            # One pair of rows per image scanned, named after the image so a project that
+            # builds a backend and a frontend can tell which one carries the findings.
+            if [ -f reports/image/images.txt ]; then
+              while IFS="$(printf '\t')" read -r REF SLUG; do
+                [ -n "$REF" ] || continue
+                SB="reports/image/sbom-image-$SLUG.cdx.json"
+                SC="reports/image/trivy-image-$SLUG.sarif"
+                row "Trivy (image \`$REF\`)"       "$SB" "$(count x "$SB" "$CDX_ALL")"   "$(count x "$SB" "$CDX_SEV")"
+                row "Trivy (image secrets)"        "$SC" "$(count x "$SC" "$SARIF_ALL")" "$(count x "$SC" "$SARIF_ALL")"
+              done < reports/image/images.txt
+            fi
             row "Aikido Zen (IAST)"      reports/runtime/zen.json             "$(count x reports/runtime/zen.json "$ZEN_ALL")"             "$(count x reports/runtime/zen.json "$ZEN_ALL")"
             row "ZAP (DAST)"             reports/runtime/zap.json             "$(count x reports/runtime/zap.json "$ZAP_ALL")"             "$(count x reports/runtime/zap.json "$ZAP_SEV")"
             row "Nuclei (DAST)"          reports/runtime/nuclei.sarif         "$(count x reports/runtime/nuclei.sarif "$SARIF_ALL")"         "$(count x reports/runtime/nuclei.sarif "$SARIF_ERR")"
@@ -1081,17 +1362,32 @@ jobs:
           cat tdxguard-summary.md >> "$GITHUB_STEP_SUMMARY"
 
           # Sticky comment: find our own earlier comment by its marker and edit it.
+          #
+          # curl and jq rather than the gh CLI. gh is preinstalled on GitHub-hosted runners
+          # and on nobody else's, and `CID=$(gh api ...)` under `bash -e` aborts the whole
+          # step when gh is missing — turning the job red AFTER every finding had already
+          # been pushed to TDxGuard, which reads as "the scan failed" when it did not.
           if [ -n "${PR_NUMBER:-}" ]; then
             MARK="<!-- tdxguard-summary -->"
             { echo "$MARK"; cat tdxguard-summary.md; } > tdxguard-comment.md
-            CID=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" --paginate \
-              --jq ".[] | select(.body | startswith(\"$MARK\")) | .id" | head -1)
+            API="$GITHUB_API_URL/repos/$GITHUB_REPOSITORY"
+            AUTH="Authorization: Bearer $GH_TOKEN"
+            # -Rs makes the whole file one JSON string, escaping included; the payload goes
+            # through a file because a summary can outgrow a command line argument.
+            jq -Rs '{body: .}' < tdxguard-comment.md > tdxguard-comment.json
+            CID=$(curl -sS -H "$AUTH" "$API/issues/$PR_NUMBER/comments?per_page=100" \
+              | jq -r --arg m "$MARK" 'map(select(.body | startswith($m))) | .[0].id // empty') \
+              || CID=""
             if [ -n "$CID" ]; then
-              gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$CID" -F body=@tdxguard-comment.md >/dev/null \
-                && echo "updated the pull request comment" || echo "::warning::Could not update the pull request comment"
+              curl -sS -f -X PATCH -H "$AUTH" -H "Content-Type: application/json" \
+                "$API/issues/comments/$CID" -d @tdxguard-comment.json >/dev/null \
+                && echo "updated the pull request comment" \
+                || echo "::warning::Could not update the pull request comment"
             else
-              gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" -F body=@tdxguard-comment.md >/dev/null \
-                && echo "posted the pull request comment" || echo "::warning::Could not post the pull request comment"
+              curl -sS -f -X POST -H "$AUTH" -H "Content-Type: application/json" \
+                "$API/issues/$PR_NUMBER/comments" -d @tdxguard-comment.json >/dev/null \
+                && echo "posted the pull request comment" \
+                || echo "::warning::Could not post the pull request comment"
             fi
           fi
 
