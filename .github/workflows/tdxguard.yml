@@ -921,7 +921,10 @@ jobs:
         id: images
         env:
           DOCKERFILES: ${{ inputs.dockerfile }}
-          DOCKER_CONTEXT: ${{ inputs.docker_context }}
+          # NOT named DOCKER_CONTEXT. That is a reserved Docker CLI variable naming the
+          # daemon context to talk to, so exporting it as "." made every build fail with
+          # `ERROR: no builder "." found` before it read a single line of the Dockerfile.
+          BUILD_CONTEXT: ${{ inputs.docker_context }}
           DOCKER_BUILD_ARGS: ${{ inputs.docker_build_args }}
           IMAGE_REF: ${{ inputs.image_ref }}
           IMAGE_BUILD_COMMAND: ${{ inputs.image_build_command }}
@@ -945,7 +948,7 @@ jobs:
             # whitespace is what separates the two fields.
             while read -r DF CTX; do
               [ -n "$DF" ] || continue
-              CTX="${CTX:-$DOCKER_CONTEXT}"
+              CTX="${CTX:-$BUILD_CONTEXT}"
               if [ ! -f "$DF" ]; then
                 echo "::error::dockerfile not found: $DF"
                 exit 1
