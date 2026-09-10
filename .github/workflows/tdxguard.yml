@@ -1,5 +1,5 @@
 # TDxGuard — reusable workflow (GitHub Actions).
-# Lives in the central repository: tda-corp/tdxguard-ci  →  .github/workflows/tdxguard.yml
+# Lives in the central repository: tda-corp/tdx-guard-ci  →  .github/workflows/tdxguard.yml
 #
 # Projects do NOT copy this file. They write a ten-line caller instead, see
 # examples/github-caller.yml.
@@ -180,7 +180,7 @@ permissions:
 
 jobs:
   # The two helper scripts used to be pulled from raw.githubusercontent at run time.
-  # That breaks as soon as tdxguard-ci is private, and fetching a script over the
+  # That breaks as soon as tdx-guard-ci is private, and fetching a script over the
   # network to run it immediately is a supply chain risk regardless of visibility:
   # whatever that URL serves at that moment executes on the runner.
   #
