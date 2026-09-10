@@ -171,6 +171,20 @@ on:
         type: boolean
         default: false
 
+# Supersede an earlier run of the same branch instead of queueing behind it. On a shared
+# self-hosted pool this is not a nicety: a few pushes in a row leave every superseded run
+# holding its place in the queue, and the run that matters waits behind scans of code
+# nobody is looking at any more. Pushing three times used to mean six queued runs.
+#
+# The group is keyed on the repository as well as the ref, because this workflow is shared
+# by every project — keyed on the ref alone, a push to main in one repository would cancel
+# the scans of main in all the others. github.ref differs between a push
+# (refs/heads/<branch>) and a pull request (refs/pull/<n>/merge), so a pull request's run
+# and its branch's run do not fight each other.
+concurrency:
+  group: tdxguard-${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
   id-token: write          # required: lets the CI mint the OIDC token it trades for an OpenBao one
