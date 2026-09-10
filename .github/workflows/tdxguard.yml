@@ -1078,6 +1078,31 @@ jobs:
               --ignore-unfixed --exit-code 1 "$REF"
           done < images.txt
 
+      # Remove what this job built, whatever happened above — hence always(), so a failing
+      # gate does not also leak an image.
+      #
+      # A self-hosted runner shares ONE Docker daemon with every other job on that host,
+      # and these tags carry the commit SHA, so no later run ever reuses one. Left behind
+      # they accumulate at one image per Dockerfile, per push, per project, without limit.
+      # Measured on the org's runner host: 22GB free of 234GB, with tdxguard-scan images
+      # sitting in that total.
+      #
+      # Only the tags built here. An entry marked `registry` came from image_ref: it was
+      # pulled, not built, and may be a base image other jobs on the host are using.
+      #
+      # The layers stay in the daemon's build cache, so the next build is still fast. This
+      # drops the tags, not the cache.
+      - name: Remove the images this job built
+        if: always()
+        run: |
+          [ -f images.txt ] || exit 0
+          while IFS="$(printf '\t')" read -r REF SLUG; do
+            if [ -z "$REF" ] || [ "$SLUG" = registry ]; then
+              continue
+            fi
+            docker rmi -f "$REF" >/dev/null 2>&1 || true
+          done < images.txt
+
   # IAST + DAST — start the application ONCE, collect two kinds of result.
   #
   # Zen is an in-app firewall: it sits INSIDE the process, hooks the dangerous sinks
