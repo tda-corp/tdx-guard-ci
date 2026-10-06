@@ -33,18 +33,27 @@ on:
           symptom is not an error message: jobs are never assigned a runner and end after two
           seconds with no log at all, which reads exactly like a failed scan.
 
-          Any runner will do, containerised included. That was not always true. Every scanner used
+          Defaults to the `Linux` label, not bare `self-hosted`, and that distinction is the
+          single largest source of red pipelines this template has had. The scanners are pinned
+          static Linux binaries fetched onto the runner; a macOS runner answers an untyped
+          `self-hosted` request perfectly happily and then reports `cannot execute binary file`,
+          exit 126. Measured over 136 runs: the three persistent runners in the pool
+          (tda-jp-lms 50%, tda-jp-tap 30%, tda-mac-intel-20 25%) produced seven of the eight
+          job failures, all of them betterleaks or trivy, while the ephemeral Linux runners sat
+          at 2-4%. tdx-scribe, the only caller that had already pinned `Linux`, was the least
+          red of the five.
+
+          Any CONTAINERISED Linux runner will do. That was not always true: every scanner used
           to run as a sibling container with the workspace bind-mounted (`docker run -v
           "$PWD:/src"`), and the Docker daemon resolves that path on the HOST — so inside a
           containerised runner the mount arrived empty. betterleaks failed loudly ("not a git
           repository") and, far worse, trivy reported SUCCESS having scanned nothing ("Number of
-          language-specific files num=0"). The scanners now run as pinned, checksum-verified static
-          binaries on the runner itself, so there is no mount left to get wrong.
+          language-specific files num=0").
 
           Set "ubuntu-latest" to go back to GitHub-hosted.
         required: false
         type: string
-        default: "self-hosted"
+        default: "Linux"
       fail_on_critical:
         description: "Fail the pipeline in the scan job itself when a severe vulnerability is found"
         required: false
@@ -623,6 +632,15 @@ jobs:
       # checked out and what the scanner sees.
       - name: Fetch Betterleaks (pinned binary)
         run: |
+          # Fail here, with a sentence, rather than three steps later with exit 126 and
+          # "cannot execute binary file". These are Linux static binaries; a macOS runner
+          # accepts an untyped `self-hosted` job and then cannot run them. runs_on now
+          # defaults to `Linux`, so this is the second line of defence for a caller that
+          # overrode it.
+          if [ "$(uname -s)" != "Linux" ]; then
+            echo "::error::This job needs a Linux runner; $RUNNER_NAME reports $(uname -s). Set runs_on to a Linux label."
+            exit 1
+          fi
           case "$(uname -m)" in
             x86_64)        ARCH=x64 ;;
             aarch64|arm64) ARCH=arm64 ;;
@@ -630,11 +648,11 @@ jobs:
           esac
           BASE="https://github.com/betterleaks/betterleaks/releases/download/v$BETTERLEAKS_VERSION"
           TARBALL="betterleaks_${BETTERLEAKS_VERSION}_linux_${ARCH}.tar.gz"
-          curl -sSfL --retry 3 -o "$RUNNER_TEMP/$TARBALL" "$BASE/$TARBALL"
+          curl -sSfL --retry 5 --retry-all-errors --retry-delay 2 -o "$RUNNER_TEMP/$TARBALL" "$BASE/$TARBALL"
           # Verify the checksum the release publishes. Without it a truncated or swapped
           # download becomes a scan that quietly finds nothing, which is the failure mode
           # this whole job is meant to avoid.
-          curl -sSfL --retry 3 -o "$RUNNER_TEMP/checksums.txt" "$BASE/checksums.txt"
+          curl -sSfL --retry 5 --retry-all-errors --retry-delay 2 -o "$RUNNER_TEMP/checksums.txt" "$BASE/checksums.txt"
           (cd "$RUNNER_TEMP" && grep " $TARBALL$" checksums.txt | sha256sum -c -)
           tar -xzf "$RUNNER_TEMP/$TARBALL" -C "$RUNNER_TEMP" betterleaks
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
@@ -693,6 +711,11 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: always()
         with: { name: betterleaks, path: betterleaks.json }
+        # Reports are consumed by the publish job in the same run and by a human
+        # reading a failure the same day. Inheriting the 90-day default on six uploads
+        # per run across five projects is what hit the artifact storage quota, which
+        # fails the job outright — a storage bill presenting itself as a red scan.
+        retention-days: 3
 
       - name: Fail on committed secrets
         if: inputs.fail_on_critical
@@ -734,10 +757,25 @@ jobs:
           fi
       - name: Fetch Opengrep and its rules (pinned)
         run: |
-          curl -sSfL -o opengrep \
-            "https://github.com/opengrep/opengrep/releases/download/v${OPENGREP_VERSION}/opengrep_manylinux_x86"
+          # Fail here, with a sentence, rather than at the scan step with exit 126 and
+          # "cannot execute binary file". See the betterleaks job for the measurement that
+          # made this worth a guard.
+          if [ "$(uname -s)" != "Linux" ]; then
+            echo "::error::This job needs a Linux runner; $RUNNER_NAME reports $(uname -s). Set runs_on to a Linux label."
+            exit 1
+          fi
+          # The asset name used to be hardcoded to _x86, which was a second way into the
+          # same exit 126: an arm64 Linux runner is a perfectly valid `Linux` runner and
+          # could not run the binary it was handed.
+          case "$(uname -m)" in
+            x86_64)        OGARCH=x86 ;;
+            aarch64|arm64) OGARCH=aarch64 ;;
+            *) echo "::error::Opengrep publishes no binary for $(uname -m)"; exit 1 ;;
+          esac
+          curl -sSfL --retry 5 --retry-all-errors --retry-delay 2 -o opengrep \
+            "https://github.com/opengrep/opengrep/releases/download/v${OPENGREP_VERSION}/opengrep_manylinux_${OGARCH}"
           chmod +x opengrep
-          curl -sSfL -o rules.tar.gz \
+          curl -sSfL --retry 5 --retry-all-errors --retry-delay 2 -o rules.tar.gz \
             "https://github.com/opengrep/opengrep-rules/archive/${OPENGREP_RULES_SHA}.tar.gz"
           # The rules land inside the workspace because the rule ids Opengrep emits carry
           # the --config path, and the enrich step trims them by that root. They must
@@ -812,6 +850,8 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: always()
         with: { name: opengrep, path: opengrep.sarif }
+        # Short, for the reason given on the betterleaks upload above.
+        retention-days: 3
       # Inline annotations on the pull request diff and the Security tab.
       - uses: github/codeql-action/upload-sarif@v4
         if: always() && inputs.code_scanning && hashFiles('opengrep.sarif') != ''
@@ -862,6 +902,11 @@ jobs:
       # keys off bomFormat, not the spec version).
       - name: Fetch Trivy (pinned binary)
         run: |
+          # Linux-only static binaries; see the betterleaks job for why this guard exists.
+          if [ "$(uname -s)" != "Linux" ]; then
+            echo "::error::This job needs a Linux runner; $RUNNER_NAME reports $(uname -s). Set runs_on to a Linux label."
+            exit 1
+          fi
           case "$(uname -m)" in
             x86_64)        ARCH=64bit ;;
             aarch64|arm64) ARCH=ARM64 ;;
@@ -869,8 +914,8 @@ jobs:
           esac
           BASE="https://github.com/aquasecurity/trivy/releases/download/v$TRIVY_VERSION"
           TARBALL="trivy_${TRIVY_VERSION}_Linux-${ARCH}.tar.gz"
-          curl -sSfL --retry 3 -o "$RUNNER_TEMP/$TARBALL" "$BASE/$TARBALL"
-          curl -sSfL --retry 3 -o "$RUNNER_TEMP/trivy-checksums.txt" "$BASE/trivy_${TRIVY_VERSION}_checksums.txt"
+          curl -sSfL --retry 5 --retry-all-errors --retry-delay 2 -o "$RUNNER_TEMP/$TARBALL" "$BASE/$TARBALL"
+          curl -sSfL --retry 5 --retry-all-errors --retry-delay 2 -o "$RUNNER_TEMP/trivy-checksums.txt" "$BASE/trivy_${TRIVY_VERSION}_checksums.txt"
           (cd "$RUNNER_TEMP" && grep " $TARBALL$" trivy-checksums.txt | sha256sum -c -)
           tar -xzf "$RUNNER_TEMP/$TARBALL" -C "$RUNNER_TEMP" trivy
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
@@ -908,6 +953,8 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: always()
         with: { name: trivy, path: "trivy.sarif\nsbom.cdx.json" }
+        # Short, for the reason given on the betterleaks upload above.
+        retention-days: 3
       # Inline annotations on the pull request diff and the Security tab. The findings
       # already travel to TDxGuard; this only puts them where the developer is looking.
       - uses: github/codeql-action/upload-sarif@v4
@@ -960,6 +1007,11 @@ jobs:
       # containerised or not — no bind mount, no path to resolve on the wrong side.
       - name: Fetch Trivy (pinned binary)
         run: |
+          # Linux-only static binaries; see the betterleaks job for why this guard exists.
+          if [ "$(uname -s)" != "Linux" ]; then
+            echo "::error::This job needs a Linux runner; $RUNNER_NAME reports $(uname -s). Set runs_on to a Linux label."
+            exit 1
+          fi
           case "$(uname -m)" in
             x86_64)        ARCH=64bit ;;
             aarch64|arm64) ARCH=ARM64 ;;
@@ -967,8 +1019,8 @@ jobs:
           esac
           BASE="https://github.com/aquasecurity/trivy/releases/download/v$TRIVY_VERSION"
           TARBALL="trivy_${TRIVY_VERSION}_Linux-${ARCH}.tar.gz"
-          curl -sSfL --retry 3 -o "$RUNNER_TEMP/$TARBALL" "$BASE/$TARBALL"
-          curl -sSfL --retry 3 -o "$RUNNER_TEMP/trivy-checksums.txt" "$BASE/trivy_${TRIVY_VERSION}_checksums.txt"
+          curl -sSfL --retry 5 --retry-all-errors --retry-delay 2 -o "$RUNNER_TEMP/$TARBALL" "$BASE/$TARBALL"
+          curl -sSfL --retry 5 --retry-all-errors --retry-delay 2 -o "$RUNNER_TEMP/trivy-checksums.txt" "$BASE/trivy_${TRIVY_VERSION}_checksums.txt"
           (cd "$RUNNER_TEMP" && grep " $TARBALL$" trivy-checksums.txt | sha256sum -c -)
           tar -xzf "$RUNNER_TEMP/$TARBALL" -C "$RUNNER_TEMP" trivy
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
@@ -1068,6 +1120,8 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: always()
         with: { name: image, path: "sbom-image-*.cdx.json\ntrivy-image-*.sarif\nimages.txt" }
+        # Short, for the reason given on the betterleaks upload above.
+        retention-days: 3
 
       - name: Fail on fixable CRITICAL/HIGH vulnerabilities in the image
         if: inputs.fail_on_critical
@@ -1216,6 +1270,12 @@ jobs:
                 #
                 # The pinned binary rather than the image, for the same reason as the other
                 # scanners: no bind mount to resolve on the wrong host.
+                #
+                # Linux-only static binaries; see the betterleaks job for why this guard exists.
+                if [ "$(uname -s)" != "Linux" ]; then
+                  echo "::error::This job needs a Linux runner; $RUNNER_NAME reports $(uname -s). Set runs_on to a Linux label."
+                  exit 1
+                fi
                 case "$(uname -m)" in
                   x86_64)        NARCH=amd64 ;;
                   aarch64|arm64) NARCH=arm64 ;;
@@ -1223,8 +1283,8 @@ jobs:
                 esac
                 NBASE="https://github.com/projectdiscovery/nuclei/releases/download/v$NUCLEI_VERSION"
                 NZIP="nuclei_${NUCLEI_VERSION}_linux_${NARCH}.zip"
-                curl -sSfL --retry 3 -o "$RUNNER_TEMP/$NZIP" "$NBASE/$NZIP"
-                curl -sSfL --retry 3 -o "$RUNNER_TEMP/nuclei-checksums.txt" \
+                curl -sSfL --retry 5 --retry-all-errors --retry-delay 2 -o "$RUNNER_TEMP/$NZIP" "$NBASE/$NZIP"
+                curl -sSfL --retry 5 --retry-all-errors --retry-delay 2 -o "$RUNNER_TEMP/nuclei-checksums.txt" \
                   "$NBASE/nuclei_${NUCLEI_VERSION}_checksums.txt"
                 (cd "$RUNNER_TEMP" && grep " $NZIP$" nuclei-checksums.txt | sha256sum -c -)
                 unzip -oq "$RUNNER_TEMP/$NZIP" nuclei -d "$RUNNER_TEMP"
@@ -1257,6 +1317,8 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: always()
         with: { name: runtime, path: "zen.json\nzap.json\nnuclei.sarif" }
+        # Short, for the reason given on the betterleaks upload above.
+        retention-days: 3
 
       - uses: github/codeql-action/upload-sarif@v4
         if: always() && inputs.code_scanning && hashFiles('nuclei.sarif') != ''
@@ -1328,6 +1390,12 @@ jobs:
           set -uo pipefail
           BRANCH="${GITHUB_REF_NAME}"
 
+          # Counts uploads that did not land. This job used to end every failed upload with
+          # `|| echo "::warning::..."`, which returns 0 — so a run that pushed NOTHING to
+          # the dashboard still went green. A scan whose results never arrive is worth less
+          # than no scan at all, because the green tick says otherwise.
+          UPLOAD_FAILED=0
+
           upload() {   # $1 = report file, $2... = extra form fields
             FILE="$1"; shift
             [ -f "$FILE" ] || return 0
@@ -1342,15 +1410,20 @@ jobs:
               shift
               i=$((i + 1))
             done
-            curl -sS -f -X POST \
+            # No -f: it hides the response body, and the body is where the reason lives.
+            # A product name the dashboard does not know answers 400 and says so.
+            CODE=$(curl -sS -o /tmp/upload-response -w '%{http_code}' -X POST \
               "$SECOBSERVE_URL/api/import/file_upload_observations_by_name/" \
               -H "Authorization: APIToken $SECOBSERVE_API_TOKEN" \
               -F "file=@$FILE" \
               -F "product_name=$PRODUCT" \
               -F "branch_name=$BRANCH" \
-              "$@" \
-              && echo "  pushed: $FILE" \
-              || echo "::warning::Could not push $FILE"
+              "$@" 2>/dev/null) || CODE="000"
+            case "$CODE" in
+              2*) echo "  pushed: $FILE" ;;
+              *)  echo "::error::Could not push $FILE — HTTP $CODE: $(head -c 300 /tmp/upload-response 2>/dev/null)"
+                  UPLOAD_FAILED=$((UPLOAD_FAILED + 1)) ;;
+            esac
           }
           # parser_name is stated explicitly rather than left to auto-detection: several
           # parsers accept a SARIF file, and they are tried in alphabetical order.
@@ -1393,6 +1466,16 @@ jobs:
               upload "reports/image/sbom-image-$SLUG.cdx.json" \
                 "parser_name=CycloneDX" "docker_image_name_tag=$REF"
             done < reports/image/images.txt
+          fi
+
+          # Every report has been attempted by now. A publish job that pushed nothing must
+          # not end green: the point of the pipeline is that the findings reach the
+          # dashboard, and a green tick on an empty upload is worse than a red one — it says
+          # the product was scanned and clean.
+          if [ "$UPLOAD_FAILED" -gt 0 ]; then
+            echo "::error::$UPLOAD_FAILED report(s) did not reach TDxGuard."
+            echo "::error::HTTP 400 usually means the product name is not registered in the dashboard."
+            exit 1
           fi
 
           # No OSV scan here. Trivy's CycloneDX already carries the CVEs, and running
