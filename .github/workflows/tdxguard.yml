@@ -710,12 +710,11 @@ jobs:
             --exit-code 0 --redact --no-banner
       - uses: actions/upload-artifact@v7
         if: always()
-        with: { name: betterleaks, path: betterleaks.json }
         # Reports are consumed by the publish job in the same run and by a human
         # reading a failure the same day. Inheriting the 90-day default on six uploads
         # per run across five projects is what hit the artifact storage quota, which
         # fails the job outright — a storage bill presenting itself as a red scan.
-        retention-days: 3
+        with: { name: betterleaks, path: betterleaks.json, retention-days: 3 }
 
       - name: Fail on committed secrets
         if: inputs.fail_on_critical
@@ -849,9 +848,8 @@ jobs:
           python3 sarif-enrich.py opengrep.sarif . --rule-roots python,javascript,typescript,go,generic --context 5 --expand-context
       - uses: actions/upload-artifact@v7
         if: always()
-        with: { name: opengrep, path: opengrep.sarif }
         # Short, for the reason given on the betterleaks upload above.
-        retention-days: 3
+        with: { name: opengrep, path: opengrep.sarif, retention-days: 3 }
       # Inline annotations on the pull request diff and the Security tab.
       - uses: github/codeql-action/upload-sarif@v4
         if: always() && inputs.code_scanning && hashFiles('opengrep.sarif') != ''
@@ -952,9 +950,8 @@ jobs:
           python3 sarif-enrich.py trivy.sarif . --unescape-html
       - uses: actions/upload-artifact@v7
         if: always()
-        with: { name: trivy, path: "trivy.sarif\nsbom.cdx.json" }
         # Short, for the reason given on the betterleaks upload above.
-        retention-days: 3
+        with: { name: trivy, path: "trivy.sarif\nsbom.cdx.json", retention-days: 3 }
       # Inline annotations on the pull request diff and the Security tab. The findings
       # already travel to TDxGuard; this only puts them where the developer is looking.
       - uses: github/codeql-action/upload-sarif@v4
@@ -1119,9 +1116,8 @@ jobs:
       # nothing was pushed, so there is no registry reference to claim.
       - uses: actions/upload-artifact@v7
         if: always()
-        with: { name: image, path: "sbom-image-*.cdx.json\ntrivy-image-*.sarif\nimages.txt" }
         # Short, for the reason given on the betterleaks upload above.
-        retention-days: 3
+        with: { name: image, path: "sbom-image-*.cdx.json\ntrivy-image-*.sarif\nimages.txt", retention-days: 3 }
 
       - name: Fail on fixable CRITICAL/HIGH vulnerabilities in the image
         if: inputs.fail_on_critical
@@ -1316,9 +1312,8 @@ jobs:
 
       - uses: actions/upload-artifact@v7
         if: always()
-        with: { name: runtime, path: "zen.json\nzap.json\nnuclei.sarif" }
         # Short, for the reason given on the betterleaks upload above.
-        retention-days: 3
+        with: { name: runtime, path: "zen.json\nzap.json\nnuclei.sarif", retention-days: 3 }
 
       - uses: github/codeql-action/upload-sarif@v4
         if: always() && inputs.code_scanning && hashFiles('nuclei.sarif') != ''
