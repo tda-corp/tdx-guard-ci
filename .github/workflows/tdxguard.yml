@@ -648,11 +648,15 @@ jobs:
           esac
           BASE="https://github.com/betterleaks/betterleaks/releases/download/v$BETTERLEAKS_VERSION"
           TARBALL="betterleaks_${BETTERLEAKS_VERSION}_linux_${ARCH}.tar.gz"
-          curl -sSfL --retry 5 --retry-all-errors --retry-delay 2 -o "$RUNNER_TEMP/$TARBALL" "$BASE/$TARBALL"
+          # --retry-all-errors (curl 7.71+) also retries a connection reset mid-transfer,
+          # but some self-hosted runners ship an older curl that rejects the option
+          # outright (exit 2, nothing downloaded). Use it only where curl knows it.
+          RETRY_ALL=; curl -s --retry-all-errors -o /dev/null file:///dev/null 2>/dev/null && RETRY_ALL=--retry-all-errors
+          curl -sSfL --retry 5 $RETRY_ALL --retry-delay 2 -o "$RUNNER_TEMP/$TARBALL" "$BASE/$TARBALL"
           # Verify the checksum the release publishes. Without it a truncated or swapped
           # download becomes a scan that quietly finds nothing, which is the failure mode
           # this whole job is meant to avoid.
-          curl -sSfL --retry 5 --retry-all-errors --retry-delay 2 -o "$RUNNER_TEMP/checksums.txt" "$BASE/checksums.txt"
+          curl -sSfL --retry 5 $RETRY_ALL --retry-delay 2 -o "$RUNNER_TEMP/checksums.txt" "$BASE/checksums.txt"
           (cd "$RUNNER_TEMP" && grep " $TARBALL$" checksums.txt | sha256sum -c -)
           tar -xzf "$RUNNER_TEMP/$TARBALL" -C "$RUNNER_TEMP" betterleaks
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
@@ -771,10 +775,12 @@ jobs:
             aarch64|arm64) OGARCH=aarch64 ;;
             *) echo "::error::Opengrep publishes no binary for $(uname -m)"; exit 1 ;;
           esac
-          curl -sSfL --retry 5 --retry-all-errors --retry-delay 2 -o opengrep \
+          # Only where curl knows it; see the betterleaks download.
+          RETRY_ALL=; curl -s --retry-all-errors -o /dev/null file:///dev/null 2>/dev/null && RETRY_ALL=--retry-all-errors
+          curl -sSfL --retry 5 $RETRY_ALL --retry-delay 2 -o opengrep \
             "https://github.com/opengrep/opengrep/releases/download/v${OPENGREP_VERSION}/opengrep_manylinux_${OGARCH}"
           chmod +x opengrep
-          curl -sSfL --retry 5 --retry-all-errors --retry-delay 2 -o rules.tar.gz \
+          curl -sSfL --retry 5 $RETRY_ALL --retry-delay 2 -o rules.tar.gz \
             "https://github.com/opengrep/opengrep-rules/archive/${OPENGREP_RULES_SHA}.tar.gz"
           # The rules land inside the workspace because the rule ids Opengrep emits carry
           # the --config path, and the enrich step trims them by that root. They must
@@ -912,8 +918,10 @@ jobs:
           esac
           BASE="https://github.com/aquasecurity/trivy/releases/download/v$TRIVY_VERSION"
           TARBALL="trivy_${TRIVY_VERSION}_Linux-${ARCH}.tar.gz"
-          curl -sSfL --retry 5 --retry-all-errors --retry-delay 2 -o "$RUNNER_TEMP/$TARBALL" "$BASE/$TARBALL"
-          curl -sSfL --retry 5 --retry-all-errors --retry-delay 2 -o "$RUNNER_TEMP/trivy-checksums.txt" "$BASE/trivy_${TRIVY_VERSION}_checksums.txt"
+          # Only where curl knows it; see the betterleaks download.
+          RETRY_ALL=; curl -s --retry-all-errors -o /dev/null file:///dev/null 2>/dev/null && RETRY_ALL=--retry-all-errors
+          curl -sSfL --retry 5 $RETRY_ALL --retry-delay 2 -o "$RUNNER_TEMP/$TARBALL" "$BASE/$TARBALL"
+          curl -sSfL --retry 5 $RETRY_ALL --retry-delay 2 -o "$RUNNER_TEMP/trivy-checksums.txt" "$BASE/trivy_${TRIVY_VERSION}_checksums.txt"
           (cd "$RUNNER_TEMP" && grep " $TARBALL$" trivy-checksums.txt | sha256sum -c -)
           tar -xzf "$RUNNER_TEMP/$TARBALL" -C "$RUNNER_TEMP" trivy
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
@@ -1016,8 +1024,10 @@ jobs:
           esac
           BASE="https://github.com/aquasecurity/trivy/releases/download/v$TRIVY_VERSION"
           TARBALL="trivy_${TRIVY_VERSION}_Linux-${ARCH}.tar.gz"
-          curl -sSfL --retry 5 --retry-all-errors --retry-delay 2 -o "$RUNNER_TEMP/$TARBALL" "$BASE/$TARBALL"
-          curl -sSfL --retry 5 --retry-all-errors --retry-delay 2 -o "$RUNNER_TEMP/trivy-checksums.txt" "$BASE/trivy_${TRIVY_VERSION}_checksums.txt"
+          # Only where curl knows it; see the betterleaks download.
+          RETRY_ALL=; curl -s --retry-all-errors -o /dev/null file:///dev/null 2>/dev/null && RETRY_ALL=--retry-all-errors
+          curl -sSfL --retry 5 $RETRY_ALL --retry-delay 2 -o "$RUNNER_TEMP/$TARBALL" "$BASE/$TARBALL"
+          curl -sSfL --retry 5 $RETRY_ALL --retry-delay 2 -o "$RUNNER_TEMP/trivy-checksums.txt" "$BASE/trivy_${TRIVY_VERSION}_checksums.txt"
           (cd "$RUNNER_TEMP" && grep " $TARBALL$" trivy-checksums.txt | sha256sum -c -)
           tar -xzf "$RUNNER_TEMP/$TARBALL" -C "$RUNNER_TEMP" trivy
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
@@ -1279,8 +1289,10 @@ jobs:
                 esac
                 NBASE="https://github.com/projectdiscovery/nuclei/releases/download/v$NUCLEI_VERSION"
                 NZIP="nuclei_${NUCLEI_VERSION}_linux_${NARCH}.zip"
-                curl -sSfL --retry 5 --retry-all-errors --retry-delay 2 -o "$RUNNER_TEMP/$NZIP" "$NBASE/$NZIP"
-                curl -sSfL --retry 5 --retry-all-errors --retry-delay 2 -o "$RUNNER_TEMP/nuclei-checksums.txt" \
+                # Only where curl knows it; see the betterleaks download.
+                RETRY_ALL=; curl -s --retry-all-errors -o /dev/null file:///dev/null 2>/dev/null && RETRY_ALL=--retry-all-errors
+                curl -sSfL --retry 5 $RETRY_ALL --retry-delay 2 -o "$RUNNER_TEMP/$NZIP" "$NBASE/$NZIP"
+                curl -sSfL --retry 5 $RETRY_ALL --retry-delay 2 -o "$RUNNER_TEMP/nuclei-checksums.txt" \
                   "$NBASE/nuclei_${NUCLEI_VERSION}_checksums.txt"
                 (cd "$RUNNER_TEMP" && grep " $NZIP$" nuclei-checksums.txt | sha256sum -c -)
                 unzip -oq "$RUNNER_TEMP/$NZIP" nuclei -d "$RUNNER_TEMP"
