@@ -641,6 +641,11 @@ jobs:
           Standard library only: a self-hosted runner has python3, not necessarily PyYAML.
           """
 
+          # Self-hosted runners ship older Pythons (3.8 at least): without this, the `list[Path]`
+          # annotations are evaluated when the functions are defined and fail with
+          # "TypeError: 'type' object is not subscriptable" before the script does anything.
+          from __future__ import annotations
+
           import re
           import sys
           from pathlib import Path
