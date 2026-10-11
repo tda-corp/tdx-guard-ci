@@ -208,10 +208,12 @@ jobs:
   # whatever that URL serves at that moment executes on the runner.
   #
   # They are written here instead. This job exists so the source lives in one place
-  # rather than being pasted into the three jobs that need it; the artifact costs a
-  # few seconds against duplicating two hundred lines three times.
+  # rather than being pasted into every job that needs it, and hands them over as a job
+  # output (no artifact, so no storage quota to run into).
   tools:
     runs-on: ${{ inputs.runs_on }}
+    outputs:
+      bundle: ${{ steps.bundle.outputs.value }}
     steps:
       # A self-hosted runner is whatever the platform team installed on it, not the
       # generously stocked GitHub-hosted image. Name what this job needs up front: a
@@ -220,7 +222,7 @@ jobs:
       - name: Check the runner has what this job needs
         run: |
           MISSING=""
-          for T in python3; do
+          for T in python3 tar base64; do
             command -v "$T" >/dev/null 2>&1 || MISSING="$MISSING $T"
           done
           if [ -n "$MISSING" ]; then
@@ -796,20 +798,153 @@ jobs:
           if __name__ == "__main__":
               sys.exit(main())
           TDXGUARD_SCRIPT_EOF
+          cat > tdxguard-lib.sh <<'TDXGUARD_SCRIPT_EOF'
+          #!/usr/bin/env bash
+          # tdxguard-lib.sh — the steps every scan job shares, sourced rather than executed:
+          #
+          #     . ./tdxguard-lib.sh
+          #     tg_push  <report> [form-field ...]            push one report to TDxGuard
+          #     tg_row   <label> <report> <jq-all> <jq-severe> add one row to the run's summary
+          #     tg_finish                                      emit the rows, fail if a push failed
+          #
+          # Each scan job pushes its own reports. They used to travel to the publish job as
+          # artifacts, and artifacts count against the organisation's storage quota: when another
+          # workflow's builds filled it, upload-artifact failed in the tools job and with it every
+          # scan of every product, although nothing was wrong with the scans. Pushing from where a
+          # report is produced needs no storage at all, and the summary rows travel as job outputs.
+          #
+          # Expects PRODUCT, BAO_ADDR and BAO_ROLE in the environment, and the job's id-token
+          # permission (ACTIONS_ID_TOKEN_REQUEST_URL/TOKEN).
+
+          # jq filters for the summary counts, per report format.
+          TG_SARIF_ALL='[.runs[].results[]] | length'
+          TG_SARIF_ERR='[.runs[].results[] | select(.level=="error")] | length'
+          # Opengrep leaves result.level empty and carries severity on the rule, so its ERROR count
+          # joins each result back to its rule's defaultConfiguration.level.
+          TG_OPENGREP_ERR='[.runs[] | .tool.driver.rules as $r | .results[] | .ruleId as $id | select($r[] | select(.id==$id and .defaultConfiguration.level=="error"))] | length'
+          TG_CDX_ALL='[.vulnerabilities[]?] | length'
+          TG_CDX_SEV='[.vulnerabilities[]? | select(any(.ratings[]?; (.severity|ascii_downcase) as $s | $s=="critical" or $s=="high"))] | length'
+          TG_ZEN_ALL='[.events[] | select(.type=="detected_attack")] | length'
+          TG_ZAP_ALL='[.site[]?.alerts[]?] | length'
+          TG_ZAP_SEV='[.site[]?.alerts[]? | select(.riskcode=="3" or .riskcode=="4")] | length'
+
+          TG_FAILED=0
+          TG_ROWS=""
+
+          # Trade the job's OIDC identity for a short-lived OpenBao token and read the SecObserve
+          # credentials with it. Once per job; the values are masked before they are kept.
+          tg_login() {
+            [ -n "${SECOBSERVE_URL:-}" ] && return 0
+            local jwt bao_token resp
+            jwt=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+              "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=openbao" | jq -r '.value')
+            bao_token=$(curl -sS -X POST -d "{\"jwt\":\"$jwt\",\"role\":\"$BAO_ROLE\"}" \
+              "$BAO_ADDR/v1/auth/jwt/login" | jq -r '.auth.client_token')
+            if [ "$bao_token" = "null" ] || [ -z "$bao_token" ]; then
+              echo "::error::Could not trade the OIDC token for an OpenBao one. Check bao_role and the id-token: write permission."
+              return 1
+            fi
+            echo "::add-mask::$bao_token"
+            resp=$(curl -sS -H "X-Vault-Token: $bao_token" "$BAO_ADDR/v1/secret/data/tdxguard/ci")
+            SECOBSERVE_URL=$(echo "$resp" | jq -r '.data.data.SECOBSERVE_URL')
+            SECOBSERVE_API_TOKEN=$(echo "$resp" | jq -r '.data.data.SECOBSERVE_API_TOKEN')
+            echo "::add-mask::$SECOBSERVE_API_TOKEN"
+            if [ "$SECOBSERVE_URL" = "null" ] || [ "$SECOBSERVE_API_TOKEN" = "null" ]; then
+              echo "::error::OpenBao returned no SecObserve credentials for role $BAO_ROLE."
+              SECOBSERVE_URL=""
+              return 1
+            fi
+          }
+
+          # tg_push <report> [form-field ...]: a missing report is skipped (that scanner did not
+          # run), a failed upload is counted and fails the job in tg_finish — a scan whose results
+          # never reach the dashboard must not end green.
+          tg_push() {
+            local file="$1" code n i
+            shift
+            [ -f "$file" ] || return 0
+            if ! tg_login; then
+              TG_FAILED=$((TG_FAILED + 1))
+              return 0
+            fi
+            # Put -F in front of every field while KEEPING the spaces inside its value
+            # ("parser_name=Aikido Zen"): each round appends "-F <field>" and drops the field at
+            # the front.
+            n=$#
+            i=0
+            while [ "$i" -lt "$n" ]; do
+              set -- "$@" -F "$1"
+              shift
+              i=$((i + 1))
+            done
+            # No -f: it hides the response body, and the body is where the reason lives. A product
+            # name the dashboard does not know answers 400 and says so.
+            code=$(curl -sS -o "$RUNNER_TEMP/tdxguard-response" -w '%{http_code}' -X POST \
+              "$SECOBSERVE_URL/api/import/file_upload_observations_by_name/" \
+              -H "Authorization: APIToken $SECOBSERVE_API_TOKEN" \
+              -F "file=@$file" \
+              -F "product_name=$PRODUCT" \
+              -F "branch_name=$GITHUB_REF_NAME" \
+              "$@" 2>/dev/null) || code="000"
+            case "$code" in
+              2*) echo "  pushed: $file" ;;
+              *)  echo "::error::Could not push $file — HTTP $code: $(head -c 300 "$RUNNER_TEMP/tdxguard-response" 2>/dev/null)"
+                  echo "::error::HTTP 400 usually means the product name is not registered in the dashboard."
+                  TG_FAILED=$((TG_FAILED + 1)) ;;
+            esac
+          }
+
+          # tg_row <label> <report> <jq-all> <jq-severe>: one row of the pull request summary.
+          tg_row() {
+            [ -f "$2" ] || return 0
+            local all severe
+            all=$(jq "$3" "$2" 2>/dev/null || echo "-")
+            severe=$(jq "$4" "$2" 2>/dev/null || echo "-")
+            TG_ROWS="${TG_ROWS}| $1 | $all | $severe |"$'\n'
+          }
+
+          # The rows go to the publish job as a job output; a random delimiter keeps a label from
+          # ending the value early.
+          tg_finish() {
+            local delimiter
+            delimiter="TDXGUARD_ROWS_$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
+            { echo "rows<<$delimiter"; printf '%s' "$TG_ROWS"; echo "$delimiter"; } >> "$GITHUB_OUTPUT"
+            if [ "$TG_FAILED" -gt 0 ]; then
+              echo "::error::$TG_FAILED report(s) did not reach TDxGuard."
+              return 1
+            fi
+          }
+          TDXGUARD_SCRIPT_EOF
           python3 -m py_compile sarif-enrich.py zen-collector.py opengrep-prune-rules.py
-      - uses: actions/upload-artifact@v7
-        with:
-          name: tdxguard-tools
-          path: "*.py"
-          retention-days: 1
+          bash -n tdxguard-lib.sh
+      # The scripts reach the other jobs as a job output, not as an artifact. Artifacts
+      # count against the organisation's storage quota, and when another workflow's builds
+      # filled it, this upload failed and took every scan of every product down with it.
+      # Compressed, the four scripts are a few kilobytes; a job output holds up to 1 MB.
+      - name: Hand the scripts to the other jobs
+        id: bundle
+        run: |
+          echo "value=$(tar czf - sarif-enrich.py zen-collector.py opengrep-prune-rules.py tdxguard-lib.sh | base64 | tr -d '\n')" >> "$GITHUB_OUTPUT"
 
   betterleaks:
     runs-on: ${{ inputs.runs_on }}
+    needs: [tools]
+    outputs:
+      rows: ${{ steps.push.outputs.rows }}
     env:
       BETTERLEAKS_VERSION: "1.8.1"
     steps:
       - uses: actions/checkout@v7
         with: { fetch-depth: 0 }
+      # The helper scripts from the tools job, unpacked outside the checkout so that they are
+      # neither scanned as part of the product nor mistaken for its files.
+      - name: Unpack the helper scripts
+        env:
+          BUNDLE: ${{ needs.tools.outputs.bundle }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/tdxguard"
+          echo "$BUNDLE" | base64 -d | tar xzf - -C "$RUNNER_TEMP/tdxguard"
+          echo "TG=$RUNNER_TEMP/tdxguard" >> "$GITHUB_ENV"
 
       - name: Check the runner has what this job needs
         run: |
@@ -909,13 +1044,23 @@ jobs:
             $CFG \
             -f json -r betterleaks.json \
             --exit-code 0 --redact --no-banner
-      - uses: actions/upload-artifact@v7
+      # Each job pushes its own reports; see tdxguard-lib.sh for why there are no artifacts.
+      - name: Push the results to TDxGuard
+        id: push
         if: always()
-        # Reports are consumed by the publish job in the same run and by a human
-        # reading a failure the same day. Inheriting the 90-day default on six uploads
-        # per run across five projects is what hit the artifact storage quota, which
-        # fails the job outright — a storage bill presenting itself as a red scan.
-        with: { name: betterleaks, path: betterleaks.json, retention-days: 3 }
+        env:
+          PRODUCT: ${{ inputs.product }}
+          BAO_ADDR: ${{ inputs.bao_addr }}
+          BAO_ROLE: ${{ inputs.bao_role }}
+        run: |
+          . "$TG/tdxguard-lib.sh"
+          # Betterleaks writes null or [] when clean, which its parser rejects; skip it. An
+          # empty new-commit scan does not mean an old secret in history is gone.
+          if [ -f betterleaks.json ] && [ "$(jq 'length' betterleaks.json)" -gt 0 ]; then
+            tg_push betterleaks.json "parser_name=Betterleaks"
+          fi
+          tg_row "Betterleaks (secrets)" betterleaks.json length length
+          tg_finish
 
       - name: Fail on committed secrets
         if: inputs.fail_on_critical
@@ -938,17 +1083,26 @@ jobs:
   opengrep:
     runs-on: ${{ inputs.runs_on }}
     needs: [tools]
+    outputs:
+      rows: ${{ steps.push.outputs.rows }}
     env:
       OPENGREP_VERSION: "1.29.0"
       OPENGREP_RULES_SHA: "f1d2b562b414783763fd02a6ed2736eaed622efa"
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v8
-        with: { name: tdxguard-tools }
+      # The helper scripts from the tools job, unpacked outside the checkout so that they are
+      # neither scanned as part of the product nor mistaken for its files.
+      - name: Unpack the helper scripts
+        env:
+          BUNDLE: ${{ needs.tools.outputs.bundle }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/tdxguard"
+          echo "$BUNDLE" | base64 -d | tar xzf - -C "$RUNNER_TEMP/tdxguard"
+          echo "TG=$RUNNER_TEMP/tdxguard" >> "$GITHUB_ENV"
       - name: Check the runner has what this job needs
         run: |
           MISSING=""
-          for T in curl tar python3; do
+          for T in curl tar python3 jq; do
             command -v "$T" >/dev/null 2>&1 || MISSING="$MISSING $T"
           done
           if [ -n "$MISSING" ]; then
@@ -1030,7 +1184,7 @@ jobs:
           # audit helper named `extra`, while in tda-plane's Django API the same rule is
           # right. Every other rule is left alone; see opengrep-prune-rules.py for the list
           # and the measurements behind it.
-          python3 opengrep-prune-rules.py ogrules-security . ogrules
+          python3 "$TG/opengrep-prune-rules.py" ogrules-security . ogrules
       # Scan "." from the repo root so the file paths in the SARIF stay relative and the
       # source links in TDxGuard resolve. Opengrep then prefixes each rule id with the
       # --config path; the next step trims that.
@@ -1056,11 +1210,21 @@ jobs:
       # (Opengrep already embeds region.snippet, so this only rewrites the ids.)
       - name: Clean up Opengrep rule ids
         run: |
-          python3 sarif-enrich.py opengrep.sarif . --rule-roots python,javascript,typescript,go,generic --context 5 --expand-context
-      - uses: actions/upload-artifact@v7
+          python3 "$TG/sarif-enrich.py" opengrep.sarif . --rule-roots python,javascript,typescript,go,generic --context 5 --expand-context
+      - name: Push the results to TDxGuard
+        id: push
         if: always()
-        # Short, for the reason given on the betterleaks upload above.
-        with: { name: opengrep, path: opengrep.sarif, retention-days: 3 }
+        env:
+          PRODUCT: ${{ inputs.product }}
+          BAO_ADDR: ${{ inputs.bao_addr }}
+          BAO_ROLE: ${{ inputs.bao_role }}
+        run: |
+          . "$TG/tdxguard-lib.sh"
+          # parser_name is stated explicitly: several parsers accept a SARIF file, and they
+          # are tried in alphabetical order.
+          tg_push opengrep.sarif "parser_name=SARIF"
+          tg_row "Opengrep (SAST)" opengrep.sarif "$TG_SARIF_ALL" "$TG_OPENGREP_ERR"
+          tg_finish
       # Inline annotations on the pull request diff and the Security tab.
       - uses: github/codeql-action/upload-sarif@v4
         if: always() && inputs.code_scanning && hashFiles('opengrep.sarif') != ''
@@ -1081,17 +1245,26 @@ jobs:
   trivy:
     runs-on: ${{ inputs.runs_on }}
     needs: [tools]
+    outputs:
+      rows: ${{ steps.push.outputs.rows }}
     env:
       TRIVY_VERSION: "0.74.0"
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v8
-        with: { name: tdxguard-tools }
+      # The helper scripts from the tools job, unpacked outside the checkout so that they are
+      # neither scanned as part of the product nor mistaken for its files.
+      - name: Unpack the helper scripts
+        env:
+          BUNDLE: ${{ needs.tools.outputs.bundle }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/tdxguard"
+          echo "$BUNDLE" | base64 -d | tar xzf - -C "$RUNNER_TEMP/tdxguard"
+          echo "TG=$RUNNER_TEMP/tdxguard" >> "$GITHUB_ENV"
 
       - name: Check the runner has what this job needs
         run: |
           MISSING=""
-          for T in curl tar python3 sha256sum; do
+          for T in curl tar python3 sha256sum jq; do
             command -v "$T" >/dev/null 2>&1 || MISSING="$MISSING $T"
           done
           if [ -n "$MISSING" ]; then
@@ -1160,11 +1333,23 @@ jobs:
       # assumed a passwordless sudo, which a self-hosted runner does not owe anyone.
       - name: Normalize the SARIF (unescape HTML, embed snippets)
         run: |
-          python3 sarif-enrich.py trivy.sarif . --unescape-html
-      - uses: actions/upload-artifact@v7
+          python3 "$TG/sarif-enrich.py" trivy.sarif . --unescape-html
+      - name: Push the results to TDxGuard
+        id: push
         if: always()
-        # Short, for the reason given on the betterleaks upload above.
-        with: { name: trivy, path: "trivy.sarif\nsbom.cdx.json", retention-days: 3 }
+        env:
+          PRODUCT: ${{ inputs.product }}
+          BAO_ADDR: ${{ inputs.bao_addr }}
+          BAO_ROLE: ${{ inputs.bao_role }}
+        run: |
+          . "$TG/tdxguard-lib.sh"
+          tg_push trivy.sarif "parser_name=SARIF"
+          # One upload of Trivy's CycloneDX yields both the CVEs and the components: the
+          # observations endpoint handles both, so file_upload_sbom_by_name is not needed.
+          tg_push sbom.cdx.json "parser_name=CycloneDX"
+          tg_row "Trivy (IaC)" trivy.sarif "$TG_SARIF_ALL" "$TG_SARIF_ERR"
+          tg_row "Trivy (dependencies)" sbom.cdx.json "$TG_CDX_ALL" "$TG_CDX_SEV"
+          tg_finish
       # Inline annotations on the pull request diff and the Security tab. The findings
       # already travel to TDxGuard; this only puts them where the developer is looking.
       - uses: github/codeql-action/upload-sarif@v4
@@ -1195,16 +1380,28 @@ jobs:
   # only works on the commits a publish pipeline has already tagged.
   image_scan:
     runs-on: ${{ inputs.runs_on }}
+    needs: [tools]
+    outputs:
+      rows: ${{ steps.push.outputs.rows }}
     if: inputs.dockerfile != '' || inputs.image_ref != ''
     env:
       TRIVY_VERSION: "0.74.0"
     steps:
       - uses: actions/checkout@v7
+      # The helper scripts from the tools job, unpacked outside the checkout so that they are
+      # neither scanned as part of the product nor mistaken for its files.
+      - name: Unpack the helper scripts
+        env:
+          BUNDLE: ${{ needs.tools.outputs.bundle }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/tdxguard"
+          echo "$BUNDLE" | base64 -d | tar xzf - -C "$RUNNER_TEMP/tdxguard"
+          echo "TG=$RUNNER_TEMP/tdxguard" >> "$GITHUB_ENV"
 
       - name: Check the runner has what this job needs
         run: |
           MISSING=""
-          for T in docker curl tar sha256sum; do
+          for T in docker curl tar sha256sum jq; do
             command -v "$T" >/dev/null 2>&1 || MISSING="$MISSING $T"
           done
           if [ -n "$MISSING" ]; then
@@ -1326,13 +1523,30 @@ jobs:
             echo "::endgroup::"
           done < images.txt
 
-      # The refs travel to the publish job so each report reaches TDxGuard tagged with the
-      # image it came from. The locally built tag is the honest answer for a built image:
-      # nothing was pushed, so there is no registry reference to claim.
-      - uses: actions/upload-artifact@v7
+      # Each report reaches TDxGuard tagged with the image it came from. The locally built
+      # tag is the honest answer for a built image: nothing was pushed, so there is no
+      # registry reference to claim.
+      - name: Push the results to TDxGuard
+        id: push
         if: always()
-        # Short, for the reason given on the betterleaks upload above.
-        with: { name: image, path: "sbom-image-*.cdx.json\ntrivy-image-*.sarif\nimages.txt", retention-days: 3 }
+        env:
+          PRODUCT: ${{ inputs.product }}
+          BAO_ADDR: ${{ inputs.bao_addr }}
+          BAO_ROLE: ${{ inputs.bao_role }}
+        run: |
+          . "$TG/tdxguard-lib.sh"
+          if [ -f images.txt ]; then
+            while IFS="$(printf '\t')" read -r REF SLUG; do
+              [ -n "$REF" ] || continue
+              tg_push "trivy-image-$SLUG.sarif" "parser_name=SARIF" "docker_image_name_tag=$REF"
+              tg_push "sbom-image-$SLUG.cdx.json" "parser_name=CycloneDX" "docker_image_name_tag=$REF"
+              # Named after the image, so a project that builds a backend and a frontend can
+              # tell which one carries the findings.
+              tg_row "Trivy (image \`$REF\`)" "sbom-image-$SLUG.cdx.json" "$TG_CDX_ALL" "$TG_CDX_SEV"
+              tg_row "Trivy (image secrets)" "trivy-image-$SLUG.sarif" "$TG_SARIF_ALL" "$TG_SARIF_ALL"
+            done < images.txt
+          fi
+          tg_finish
 
       - name: Fail on fixable CRITICAL/HIGH vulnerabilities in the image
         if: inputs.fail_on_critical
@@ -1390,13 +1604,22 @@ jobs:
   runtime:
     runs-on: ${{ inputs.runs_on }}
     needs: [tools]
+    outputs:
+      rows: ${{ steps.push.outputs.rows }}
     if: inputs.app_start_command != ''
     env:
       NUCLEI_VERSION: "3.4.10"
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v8
-        with: { name: tdxguard-tools }
+      # The helper scripts from the tools job, unpacked outside the checkout so that they are
+      # neither scanned as part of the product nor mistaken for its files.
+      - name: Unpack the helper scripts
+        env:
+          BUNDLE: ${{ needs.tools.outputs.bundle }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/tdxguard"
+          echo "$BUNDLE" | base64 -d | tar xzf - -C "$RUNNER_TEMP/tdxguard"
+          echo "TG=$RUNNER_TEMP/tdxguard" >> "$GITHUB_ENV"
 
       - name: Check the runner has what this job needs
         run: |
@@ -1431,7 +1654,7 @@ jobs:
           NUCLEI: ${{ inputs.nuclei }}
         run: |
           set -u
-          python3 zen-collector.py --out zen.json --port 5000 --strip-prefix "$PWD" &
+          python3 "$TG/zen-collector.py" --out zen.json --port 5000 --strip-prefix "$PWD" &
           COLLECTOR=$!
 
           sh -c "$APP_START_COMMAND" &
@@ -1509,7 +1732,7 @@ jobs:
                   # Nuclei stamps kind "open" on every match, and SecObserve imports only
                   # kind "fail" (SARIF §3.27.9). Without this the upload returns HTTP 200
                   # with zero observations — a silent loss. Verified on a real scan.
-                  python3 sarif-enrich.py nuclei.sarif . --kind-fail
+                  python3 "$TG/sarif-enrich.py" nuclei.sarif . --kind-fail
                 fi
               fi
             fi
@@ -1527,10 +1750,25 @@ jobs:
           kill -TERM "$COLLECTOR" 2>/dev/null || true
           wait "$COLLECTOR" 2>/dev/null || true
 
-      - uses: actions/upload-artifact@v7
+      - name: Push the results to TDxGuard
+        id: push
         if: always()
-        # Short, for the reason given on the betterleaks upload above.
-        with: { name: runtime, path: "zen.json\nzap.json\nnuclei.sarif", retention-days: 3 }
+        env:
+          PRODUCT: ${{ inputs.product }}
+          BAO_ADDR: ${{ inputs.bao_addr }}
+          BAO_ROLE: ${{ inputs.bao_role }}
+          ZAP_TARGET: ${{ inputs.zap_target }}
+        run: |
+          . "$TG/tdxguard-lib.sh"
+          # No endpoint_url for zen.json: the parser derives one per route (/users), and
+          # the form field would overwrite it with the bare target.
+          tg_push zen.json "parser_name=Aikido Zen"
+          tg_push zap.json "parser_name=ZAP" "endpoint_url=$ZAP_TARGET"
+          tg_push nuclei.sarif "parser_name=SARIF" "endpoint_url=$ZAP_TARGET"
+          tg_row "Aikido Zen (IAST)" zen.json "$TG_ZEN_ALL" "$TG_ZEN_ALL"
+          tg_row "ZAP (DAST)" zap.json "$TG_ZAP_ALL" "$TG_ZAP_SEV"
+          tg_row "Nuclei (DAST)" nuclei.sarif "$TG_SARIF_ALL" "$TG_SARIF_ERR"
+          tg_finish
 
       - uses: github/codeql-action/upload-sarif@v4
         if: always() && inputs.code_scanning && hashFiles('nuclei.sarif') != ''
@@ -1549,11 +1787,8 @@ jobs:
   publish:
     runs-on: ${{ inputs.runs_on }}
     needs: [betterleaks, opengrep, trivy, image_scan, runtime]
-    if: always()          # push the results to the dashboard even when a gate failed
+    if: always()          # summarize and comment even when a scan's gate failed
     steps:
-      - uses: actions/download-artifact@v8
-        with: { path: reports }
-
       - name: Check the runner has what this job needs
         run: |
           MISSING=""
@@ -1594,108 +1829,8 @@ jobs:
           UI=$(echo "$RESP" | jq -r '.data.data.SECOBSERVE_UI_URL // empty')
           echo "SECOBSERVE_UI_URL=$UI" >> "$GITHUB_ENV"
 
-      - name: Push the results to SecObserve
-        env:
-          PRODUCT: ${{ inputs.product }}
-          ZAP_TARGET: ${{ inputs.zap_target }}
-        run: |
-          set -uo pipefail
-          BRANCH="${GITHUB_REF_NAME}"
-
-          # Counts uploads that did not land. This job used to end every failed upload with
-          # `|| echo "::warning::..."`, which returns 0 — so a run that pushed NOTHING to
-          # the dashboard still went green. A scan whose results never arrive is worth less
-          # than no scan at all, because the green tick says otherwise.
-          UPLOAD_FAILED=0
-
-          upload() {   # $1 = report file, $2... = extra form fields
-            FILE="$1"; shift
-            [ -f "$FILE" ] || return 0
-            # Put -F in front of every field while KEEPING the spaces inside its value
-            # ("parser_name=Aikido Zen"): each round appends "-F <field>" at the end and
-            # drops the field at the front. Concatenating into an unquoted $EXTRA would
-            # split "Aikido Zen" into two arguments.
-            N=$#
-            i=0
-            while [ "$i" -lt "$N" ]; do
-              set -- "$@" -F "$1"
-              shift
-              i=$((i + 1))
-            done
-            # No -f: it hides the response body, and the body is where the reason lives.
-            # A product name the dashboard does not know answers 400 and says so.
-            CODE=$(curl -sS -o /tmp/upload-response -w '%{http_code}' -X POST \
-              "$SECOBSERVE_URL/api/import/file_upload_observations_by_name/" \
-              -H "Authorization: APIToken $SECOBSERVE_API_TOKEN" \
-              -F "file=@$FILE" \
-              -F "product_name=$PRODUCT" \
-              -F "branch_name=$BRANCH" \
-              "$@" 2>/dev/null) || CODE="000"
-            case "$CODE" in
-              2*) echo "  pushed: $FILE" ;;
-              *)  echo "::error::Could not push $FILE — HTTP $CODE: $(head -c 300 /tmp/upload-response 2>/dev/null)"
-                  UPLOAD_FAILED=$((UPLOAD_FAILED + 1)) ;;
-            esac
-          }
-          # parser_name is stated explicitly rather than left to auto-detection: several
-          # parsers accept a SARIF file, and they are tried in alphabetical order.
-          # Betterleaks writes null or [] when clean, which its parser rejects; skip
-          # it. An empty new-commit scan does not mean an old secret in history is gone.
-          if [ -f reports/betterleaks/betterleaks.json ] && [ "$(jq 'length' reports/betterleaks/betterleaks.json)" -gt 0 ]; then
-            upload reports/betterleaks/betterleaks.json "parser_name=Betterleaks"
-          fi
-          upload reports/opengrep/opengrep.sarif "parser_name=SARIF"
-          upload reports/trivy/trivy.sarif "parser_name=SARIF"
-          # The image job scans one image per Dockerfile and records "<ref><TAB><slug>" per
-          # line, so both of its reports are pushed per image with the ref they came from.
-          # Reading the list beats guessing from inputs.image_ref, which is empty whenever
-          # the image was built here rather than pulled.
-          if [ -f reports/image/images.txt ]; then
-            while IFS="$(printf '\t')" read -r REF SLUG; do
-              [ -n "$REF" ] || continue
-              upload "reports/image/trivy-image-$SLUG.sarif" \
-                "parser_name=SARIF" "docker_image_name_tag=$REF"
-            done < reports/image/images.txt
-          fi
-          # No endpoint_url for zen.json: the parser derives one per route (/users), and
-          # the form field would overwrite it with the bare target.
-          upload reports/runtime/zen.json "parser_name=Aikido Zen"
-          upload reports/runtime/zap.json "parser_name=ZAP" "endpoint_url=$ZAP_TARGET"
-          upload reports/runtime/nuclei.sarif "parser_name=SARIF" "endpoint_url=$ZAP_TARGET"
-
-          # --- SBOM: one upload yields both the CVEs and the components ---
-          # Trivy's CycloneDX file carries both, and the observations endpoint handles both
-          # in the same call (observations through get_observations, components through
-          # get_license_components). So file_upload_sbom_by_name is NOT needed.
-          #
-          # The worthwhile difference: the observations endpoint accepts
-          # docker_image_name_tag, the sbom endpoint does not — which is how the image's
-          # CVEs end up attached to the right image.
-          upload reports/trivy/sbom.cdx.json "parser_name=CycloneDX"
-          if [ -f reports/image/images.txt ]; then
-            while IFS="$(printf '\t')" read -r REF SLUG; do
-              [ -n "$REF" ] || continue
-              upload "reports/image/sbom-image-$SLUG.cdx.json" \
-                "parser_name=CycloneDX" "docker_image_name_tag=$REF"
-            done < reports/image/images.txt
-          fi
-
-          # Every report has been attempted by now. A publish job that pushed nothing must
-          # not end green: the point of the pipeline is that the findings reach the
-          # dashboard, and a green tick on an empty upload is worse than a red one — it says
-          # the product was scanned and clean.
-          if [ "$UPLOAD_FAILED" -gt 0 ]; then
-            echo "::error::$UPLOAD_FAILED report(s) did not reach TDxGuard."
-            echo "::error::HTTP 400 usually means the product name is not registered in the dashboard."
-            exit 1
-          fi
-
-          # No OSV scan here. Trivy's CycloneDX already carries the CVEs, and running
-          # OSV on top reported the very same CVEs a second time — every one of them
-          # counted twice by the gate and in the product header. EPSS does not need it
-          # either: TDxGuard enriches every observation with a CVE id on its own. OSV
-          # stays available per product in the dashboard (osv_enabled) for anyone who
-          # wants a second opinion there.
+      # The scan jobs push their own reports (see tdxguard-lib.sh). What is left here is
+      # what needs all of them: the summary, the pull request comment and the gate.
 
       # What Aikido shows on a pull request, from the reports already produced: one
       # table with the counts per scanner and a link straight into TDxGuard. Written to
@@ -1707,50 +1842,22 @@ jobs:
           PRODUCT: ${{ inputs.product }}
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          ROWS_BETTERLEAKS: ${{ needs.betterleaks.outputs.rows }}
+          ROWS_OPENGREP: ${{ needs.opengrep.outputs.rows }}
+          ROWS_TRIVY: ${{ needs.trivy.outputs.rows }}
+          ROWS_IMAGE: ${{ needs.image_scan.outputs.rows }}
+          ROWS_RUNTIME: ${{ needs.runtime.outputs.rows }}
         run: |
           set -uo pipefail
           BRANCH="${GITHUB_REF_NAME}"
-
-          # <label> <file> <jq filter for the count> [<jq filter for the severe count>]
-          count() { [ -f "$2" ] && jq "$3" "$2" 2>/dev/null || echo "-"; }
-          row() {   # $1 = scanner, $2 = file, $3 = total, $4 = severe
-            [ -f "$2" ] || return 0
-            printf '| %s | %s | %s |\n' "$1" "$3" "$4"
-          }
-          SARIF_ALL='[.runs[].results[]] | length'
-          SARIF_ERR='[.runs[].results[] | select(.level=="error")] | length'
-          # Opengrep leaves result.level empty and carries severity on the rule, so its
-          # ERROR count joins each result back to its rule's defaultConfiguration.level.
-          OG_ERR='[.runs[] | .tool.driver.rules as $r | .results[] | .ruleId as $id | select($r[] | select(.id==$id and .defaultConfiguration.level=="error"))] | length'
-          CDX_ALL='[.vulnerabilities[]?] | length'
-          CDX_SEV='[.vulnerabilities[]? | select(any(.ratings[]?; (.severity|ascii_downcase) as $s | $s=="critical" or $s=="high"))] | length'
-          ZEN_ALL='[.events[] | select(.type=="detected_attack")] | length'
-          ZAP_ALL='[.site[]?.alerts[]?] | length'
-          ZAP_SEV='[.site[]?.alerts[]? | select(.riskcode=="3" or .riskcode=="4")] | length'
 
           {
             echo "### TDxGuard — \`$PRODUCT\` @ \`$BRANCH\`"
             echo
             echo "| Scanner | Findings | Severe |"
             echo "|---|---:|---:|"
-            row "Betterleaks (secrets)"  reports/betterleaks/betterleaks.json "$(count x reports/betterleaks/betterleaks.json "length")"      "$(count x reports/betterleaks/betterleaks.json "length")"
-            row "Opengrep (SAST)"        reports/opengrep/opengrep.sarif      "$(count x reports/opengrep/opengrep.sarif "$SARIF_ALL")"      "$(count x reports/opengrep/opengrep.sarif "$OG_ERR")"
-            row "Trivy (IaC)"            reports/trivy/trivy.sarif            "$(count x reports/trivy/trivy.sarif "$SARIF_ALL")"            "$(count x reports/trivy/trivy.sarif "$SARIF_ERR")"
-            row "Trivy (dependencies)"   reports/trivy/sbom.cdx.json          "$(count x reports/trivy/sbom.cdx.json "$CDX_ALL")"          "$(count x reports/trivy/sbom.cdx.json "$CDX_SEV")"
-            # One pair of rows per image scanned, named after the image so a project that
-            # builds a backend and a frontend can tell which one carries the findings.
-            if [ -f reports/image/images.txt ]; then
-              while IFS="$(printf '\t')" read -r REF SLUG; do
-                [ -n "$REF" ] || continue
-                SB="reports/image/sbom-image-$SLUG.cdx.json"
-                SC="reports/image/trivy-image-$SLUG.sarif"
-                row "Trivy (image \`$REF\`)"       "$SB" "$(count x "$SB" "$CDX_ALL")"   "$(count x "$SB" "$CDX_SEV")"
-                row "Trivy (image secrets)"        "$SC" "$(count x "$SC" "$SARIF_ALL")" "$(count x "$SC" "$SARIF_ALL")"
-              done < reports/image/images.txt
-            fi
-            row "Aikido Zen (IAST)"      reports/runtime/zen.json             "$(count x reports/runtime/zen.json "$ZEN_ALL")"             "$(count x reports/runtime/zen.json "$ZEN_ALL")"
-            row "ZAP (DAST)"             reports/runtime/zap.json             "$(count x reports/runtime/zap.json "$ZAP_ALL")"             "$(count x reports/runtime/zap.json "$ZAP_SEV")"
-            row "Nuclei (DAST)"          reports/runtime/nuclei.sarif         "$(count x reports/runtime/nuclei.sarif "$SARIF_ALL")"         "$(count x reports/runtime/nuclei.sarif "$SARIF_ERR")"
+            # One block of rows per scan job, computed where the report was produced.
+            printf '%s' "$ROWS_BETTERLEAKS$ROWS_OPENGREP$ROWS_TRIVY$ROWS_IMAGE$ROWS_RUNTIME"
             echo
             echo "_Severe = secrets, ERROR level, CRITICAL/HIGH, or an attack reaching a sink._"
             echo
