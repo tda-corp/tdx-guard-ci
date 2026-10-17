@@ -1,0 +1,188 @@
+{
+ "version": "2.1.0",
+ "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json",
+ "runs": [
+  {
+   "tool": {
+    "driver": {
+     "fullName": "Trivy Vulnerability Scanner",
+     "informationUri": "https://github.com/aquasecurity/trivy",
+     "name": "Trivy",
+     "rules": [
+      {
+       "id": "DS-0002",
+       "name": "Misconfiguration",
+       "shortDescription": {
+        "text": "Image user should not be 'root'"
+       },
+       "fullDescription": {
+        "text": "Running containers with 'root' user can lead to a container escape situation. It is a best practice to run containers as non-root users, which can be done by adding a 'USER' statement to the Dockerfile."
+       },
+       "defaultConfiguration": {
+        "level": "error"
+       },
+       "helpUri": "https://avd.aquasec.com/misconfig/ds-0002",
+       "help": {
+        "text": "Misconfiguration DS-0002\nType: Dockerfile Security Check\nSeverity: HIGH\nCheck: Image user should not be 'root'\nMessage: Specify at least 1 USER command in Dockerfile with non-root user as argument\nLink: [DS-0002](https://avd.aquasec.com/misconfig/ds-0002)\nRunning containers with 'root' user can lead to a container escape situation. It is a best practice to run containers as non-root users, which can be done by adding a 'USER' statement to the Dockerfile.",
+        "markdown": "**Misconfiguration DS-0002**\n| Type | Severity | Check | Message | Link |\n| --- | --- | --- | --- | --- |\n|Dockerfile Security Check|HIGH|Image user should not be 'root'|Specify at least 1 USER command in Dockerfile with non-root user as argument|[DS-0002](https://avd.aquasec.com/misconfig/ds-0002)|\n\nRunning containers with 'root' user can lead to a container escape situation. It is a best practice to run containers as non-root users, which can be done by adding a 'USER' statement to the Dockerfile."
+       },
+       "properties": {
+        "precision": "very-high",
+        "security-severity": "8.0",
+        "tags": [
+         "misconfiguration",
+         "security",
+         "HIGH"
+        ]
+       }
+      },
+      {
+       "id": "DS-0025",
+       "name": "Misconfiguration",
+       "shortDescription": {
+        "text": "'apk add' is missing '--no-cache'"
+       },
+       "fullDescription": {
+        "text": "You should use 'apk add' with '--no-cache' to clean package cached data and reduce image size."
+       },
+       "defaultConfiguration": {
+        "level": "error"
+       },
+       "helpUri": "https://avd.aquasec.com/misconfig/ds-0025",
+       "help": {
+        "text": "Misconfiguration DS-0025\nType: Dockerfile Security Check\nSeverity: HIGH\nCheck: 'apk add' is missing '--no-cache'\nMessage: '--no-cache' is missed: apk add curl\nLink: [DS-0025](https://avd.aquasec.com/misconfig/ds-0025)\nYou should use 'apk add' with '--no-cache' to clean package cached data and reduce image size.",
+        "markdown": "**Misconfiguration DS-0025**\n| Type | Severity | Check | Message | Link |\n| --- | --- | --- | --- | --- |\n|Dockerfile Security Check|HIGH|'apk add' is missing '--no-cache'|'--no-cache' is missed: apk add curl|[DS-0025](https://avd.aquasec.com/misconfig/ds-0025)|\n\nYou should use 'apk add' with '--no-cache' to clean package cached data and reduce image size."
+       },
+       "properties": {
+        "precision": "very-high",
+        "security-severity": "8.0",
+        "tags": [
+         "misconfiguration",
+         "security",
+         "HIGH"
+        ]
+       }
+      },
+      {
+       "id": "DS-0026",
+       "name": "Misconfiguration",
+       "shortDescription": {
+        "text": "No HEALTHCHECK defined"
+       },
+       "fullDescription": {
+        "text": "You should add HEALTHCHECK instruction in your docker container images to perform the health check on running containers."
+       },
+       "defaultConfiguration": {
+        "level": "note"
+       },
+       "helpUri": "https://avd.aquasec.com/misconfig/ds-0026",
+       "help": {
+        "text": "Misconfiguration DS-0026\nType: Dockerfile Security Check\nSeverity: LOW\nCheck: No HEALTHCHECK defined\nMessage: Add HEALTHCHECK instruction in your Dockerfile\nLink: [DS-0026](https://avd.aquasec.com/misconfig/ds-0026)\nYou should add HEALTHCHECK instruction in your docker container images to perform the health check on running containers.",
+        "markdown": "**Misconfiguration DS-0026**\n| Type | Severity | Check | Message | Link |\n| --- | --- | --- | --- | --- |\n|Dockerfile Security Check|LOW|No HEALTHCHECK defined|Add HEALTHCHECK instruction in your Dockerfile|[DS-0026](https://avd.aquasec.com/misconfig/ds-0026)|\n\nYou should add HEALTHCHECK instruction in your docker container images to perform the health check on running containers."
+       },
+       "properties": {
+        "precision": "very-high",
+        "security-severity": "2.0",
+        "tags": [
+         "misconfiguration",
+         "security",
+         "LOW"
+        ]
+       }
+      }
+     ],
+     "version": "0.74.0"
+    }
+   },
+   "results": [
+    {
+     "ruleId": "DS-0002",
+     "ruleIndex": 0,
+     "level": "error",
+     "message": {
+      "text": "Artifact: Dockerfile\nType: dockerfile\nVulnerability DS-0002\nSeverity: HIGH\nMessage: Specify at least 1 USER command in Dockerfile with non-root user as argument\nLink: [DS-0002](https://avd.aquasec.com/misconfig/ds-0002)"
+     },
+     "locations": [
+      {
+       "physicalLocation": {
+        "artifactLocation": {
+         "uri": "Dockerfile",
+         "uriBaseId": "ROOTPATH"
+        },
+        "region": {
+         "startLine": 1,
+         "startColumn": 1,
+         "endLine": 1,
+         "endColumn": 1
+        }
+       },
+       "message": {
+        "text": "Dockerfile"
+       }
+      }
+     ]
+    },
+    {
+     "ruleId": "DS-0025",
+     "ruleIndex": 1,
+     "level": "error",
+     "message": {
+      "text": "Artifact: Dockerfile\nType: dockerfile\nVulnerability DS-0025\nSeverity: HIGH\nMessage: '--no-cache' is missed: apk add curl\nLink: [DS-0025](https://avd.aquasec.com/misconfig/ds-0025)"
+     },
+     "locations": [
+      {
+       "physicalLocation": {
+        "artifactLocation": {
+         "uri": "Dockerfile",
+         "uriBaseId": "ROOTPATH"
+        },
+        "region": {
+         "startLine": 2,
+         "startColumn": 1,
+         "endLine": 2,
+         "endColumn": 1
+        }
+       },
+       "message": {
+        "text": "Dockerfile"
+       }
+      }
+     ]
+    },
+    {
+     "ruleId": "DS-0026",
+     "ruleIndex": 2,
+     "level": "note",
+     "message": {
+      "text": "Artifact: Dockerfile\nType: dockerfile\nVulnerability DS-0026\nSeverity: LOW\nMessage: Add HEALTHCHECK instruction in your Dockerfile\nLink: [DS-0026](https://avd.aquasec.com/misconfig/ds-0026)"
+     },
+     "locations": [
+      {
+       "physicalLocation": {
+        "artifactLocation": {
+         "uri": "Dockerfile",
+         "uriBaseId": "ROOTPATH"
+        },
+        "region": {
+         "startLine": 1,
+         "startColumn": 1,
+         "endLine": 1,
+         "endColumn": 1
+        }
+       },
+       "message": {
+        "text": "Dockerfile"
+       }
+      }
+     ]
+    }
+   ],
+   "columnKind": "utf16CodeUnits",
+   "originalUriBaseIds": {
+    "ROOTPATH": {
+     "uri": "file:///private/tmp/claude-502/-Volumes-Ginseng-Work-Coding-TDA-tda-guard/41c27f47-857c-4ef6-a445-118dba50dfcc/scratchpad/fixture/"
+    }
+   }
+  }
+ ]
+}

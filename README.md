@@ -25,7 +25,7 @@ permissions:
 
 jobs:
   tdxguard:
-    uses: tda-corp/tdxguard-ci/.github/workflows/tdxguard.yml@v1
+    uses: tda-corp/tdx-guard-ci/.github/workflows/tdxguard.yml@v1
     with:
       product: <product name in TDxGuard>
       bao_role: ci-<project>
@@ -42,3 +42,32 @@ TDxGuard API token from there.
 
 See `ci-templates/README.md` in tdx-guard for every input and for the local runner
 that reproduces the same scans on a workstation.
+
+## The `tdxguard` command line tool
+
+`cli/` holds the same tool as `cli/` in `tda-corp/tdx-guard`, published here so it can be
+installed without access to that repository. It runs the pipeline's scans on a developer's
+machine and uploads the results to TDxGuard, with or without Docker:
+
+```sh
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/tda-corp/tdx-guard-ci/main/install.sh | sh
+```
+
+```powershell
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/tda-corp/tdx-guard-ci/main/install.ps1 | iex
+```
+
+Or with Python: `pipx install "git+https://github.com/tda-corp/tdx-guard-ci#subdirectory=cli"`.
+
+```sh
+tdxguard login     # TDxSSO in the browser
+tdxguard init      # writes .tdxguard.yml
+tdxguard scan      # scans and uploads to TDxGuard
+```
+
+See [`cli/README.md`](cli/README.md). A release is cut by pushing a `cli-vX.Y.Z` tag
+matching the package version: `.github/workflows/cli-release.yml` builds the standalone
+executables for macOS, Linux and Windows, tests each on its own OS, and publishes them
+with a `checksums.txt`.

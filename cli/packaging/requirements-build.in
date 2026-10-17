@@ -1,0 +1,5 @@
+# The build tools of the standalone executable; compile with:
+#   uv pip compile --universal --generate-hashes --python-version 3.12 requirements-build.in -o requirements-build.txt
+pyinstaller==6.22.3
+pyinstaller-hooks-contrib==2026.8
+PyYAML==6.0.3

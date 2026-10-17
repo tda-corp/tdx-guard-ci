@@ -1,0 +1,470 @@
+{
+ "version": "2.1.0",
+ "runs": [
+  {
+   "invocations": [
+    {
+     "executionSuccessful": true,
+     "toolExecutionNotifications": []
+    }
+   ],
+   "results": [
+    {
+     "fingerprints": {
+      "matchBasedId/v1": "4e00255ebcb6ff16dc8dfdbc15fbedd50818037029527b6fcf8eaf364ad141d138c44b359aa002a3bab1d86d236ffc13600f0baad44c7d98585d3fac7953c200_0"
+     },
+     "locations": [
+      {
+       "physicalLocation": {
+        "artifactLocation": {
+         "uri": "app/main.py",
+         "uriBaseId": "%SRCROOT%"
+        },
+        "region": {
+         "endColumn": 37,
+         "endLine": 11,
+         "startColumn": 5,
+         "startLine": 11
+        }
+       }
+      }
+     ],
+     "message": {
+      "text": "Detected user input entering a `subprocess` call unsafely. This could result in a command injection vulnerability. An attacker could use this vulnerability to execute arbitrary commands on the host, which allows them to download malware, scan sensitive data, or run any command they wish on the server. Do not let users choose the command to run. In general, prefer to use Python API versions of system commands. If you must use subprocess, use a dictionary to allowlist a set of commands."
+     },
+     "properties": {},
+     "ruleId": "python.flask.security.injection.subprocess-injection"
+    },
+    {
+     "fingerprints": {
+      "matchBasedId/v1": "ae714b14ef33e0bacd5be62e25d73c6d7a7678b14ccb9145631b01678487a9d0e8637b4f6c2cce1836ca0930a2397688f20fd91d9014d824f09003f8bdb73fc5_0"
+     },
+     "locations": [
+      {
+       "physicalLocation": {
+        "artifactLocation": {
+         "uri": "app/main.py",
+         "uriBaseId": "%SRCROOT%"
+        },
+        "region": {
+         "endColumn": 37,
+         "endLine": 11,
+         "startColumn": 5,
+         "startLine": 11
+        }
+       }
+      }
+     ],
+     "message": {
+      "text": "Detected subprocess function 'call' without a static string. If this data can be controlled by a malicious actor, it may be an instance of command injection. Audit the use of this call to ensure it is not controllable by an external resource. You may consider using 'shlex.escape()'."
+     },
+     "properties": {},
+     "ruleId": "python.lang.security.audit.dangerous-subprocess-use-audit"
+    },
+    {
+     "fingerprints": {
+      "matchBasedId/v1": "5e129bd5db49dab9054cd6fb8dfeac69555a706678cbc708813d1559cf5eb7115c9300b2152d0d78820f1250439dde3d3dfe1a9a8372fe605643e349ef29b0b7_0"
+     },
+     "locations": [
+      {
+       "physicalLocation": {
+        "artifactLocation": {
+         "uri": "app/main.py",
+         "uriBaseId": "%SRCROOT%"
+        },
+        "region": {
+         "endColumn": 24,
+         "endLine": 11,
+         "startColumn": 21,
+         "startLine": 11
+        }
+       }
+      }
+     ],
+     "message": {
+      "text": "Detected subprocess function 'call' with user controlled data. A malicious actor could leverage this to perform command injection. You may consider using 'shlex.escape()'."
+     },
+     "properties": {},
+     "ruleId": "python.lang.security.dangerous-subprocess-use"
+    },
+    {
+     "fingerprints": {
+      "matchBasedId/v1": "16f6875013b1b37c9054d889aa1737d42a4a2c009f030a651af8f1bb399cec9eab5b98118a3d20e3170445b57efe49b4fcb72cf2cabae202d8f084bcd24451a8_0"
+     },
+     "locations": [
+      {
+       "physicalLocation": {
+        "artifactLocation": {
+         "uri": "app/main.py",
+         "uriBaseId": "%SRCROOT%"
+        },
+        "region": {
+         "endColumn": 36,
+         "endLine": 11,
+         "startColumn": 32,
+         "startLine": 11
+        }
+       }
+      }
+     ],
+     "message": {
+      "text": "Found 'subprocess' function 'call' with 'shell=True'. This is dangerous because this call will spawn the command using a shell process. Doing so propagates current shell settings and variables, which makes it much easier for a malicious actor to execute commands. Use 'shell=False' instead."
+     },
+     "properties": {},
+     "ruleId": "python.lang.security.audit.subprocess-shell-true"
+    },
+    {
+     "fingerprints": {
+      "matchBasedId/v1": "7112fccd2e351a2186d77a50cfa5703d36eae8d19a7568c9c43ab7090d8683c555f8b7b4719a51e82d9ff3b4aabb2d11b92ad1649d648d6061a6f71ab92ad07b_0"
+     },
+     "locations": [
+      {
+       "physicalLocation": {
+        "artifactLocation": {
+         "uri": "app/main.py",
+         "uriBaseId": "%SRCROOT%"
+        },
+        "region": {
+         "endColumn": 42,
+         "endLine": 12,
+         "startColumn": 12,
+         "startLine": 12
+        }
+       }
+      }
+     ],
+     "message": {
+      "text": "Found user data in a call to 'eval'. This is extremely dangerous because it can enable an attacker to execute arbitrary remote code on the system. Instead, refactor your code to not use 'eval' and instead use a safe library for the specific functionality you need."
+     },
+     "properties": {},
+     "ruleId": "python.django.security.injection.code.user-eval"
+    },
+    {
+     "fingerprints": {
+      "matchBasedId/v1": "a8c14659fd045422332dbd270a4c2a841821b77b8b0e0edfae36be2796cd896892d597f76cbe1dc0cbda5f19328d80aedf34877120729a5b49abc554470f8c2f_0"
+     },
+     "locations": [
+      {
+       "physicalLocation": {
+        "artifactLocation": {
+         "uri": "app/main.py",
+         "uriBaseId": "%SRCROOT%"
+        },
+        "region": {
+         "endColumn": 42,
+         "endLine": 12,
+         "startColumn": 12,
+         "startLine": 12
+        }
+       }
+      }
+     ],
+     "message": {
+      "text": "Detected user data flowing into eval. This is code injection and should be avoided."
+     },
+     "properties": {},
+     "ruleId": "python.flask.security.injection.eval-injection"
+    },
+    {
+     "fingerprints": {
+      "matchBasedId/v1": "cc9f258a72c4f3acec4ffe30504281448642fc3ecdd4279126f2af7fe9bf509369833ccc9644bb090a0fada00239c68b5b5f7392ef84a1dd99b4fec1a95ce3d3_0"
+     },
+     "locations": [
+      {
+       "physicalLocation": {
+        "artifactLocation": {
+         "uri": "app/main.py",
+         "uriBaseId": "%SRCROOT%"
+        },
+        "region": {
+         "endColumn": 42,
+         "endLine": 12,
+         "startColumn": 12,
+         "startLine": 12
+        }
+       }
+      }
+     ],
+     "message": {
+      "text": "Detected the use of eval(). eval() can be dangerous if used to evaluate dynamic content. If this content can be input from outside the program, this may be a code injection vulnerability. Ensure evaluated content is not definable by external sources."
+     },
+     "properties": {},
+     "ruleId": "python.lang.security.audit.eval-detected"
+    }
+   ],
+   "tool": {
+    "driver": {
+     "name": "Opengrep OSS",
+     "rules": [
+      {
+       "defaultConfiguration": {
+        "level": "warning"
+       },
+       "fullDescription": {
+        "text": "Found user data in a call to 'eval'. This is extremely dangerous because it can enable an attacker to execute arbitrary remote code on the system. Instead, refactor your code to not use 'eval' and instead use a safe library for the specific functionality you need."
+       },
+       "help": {
+        "markdown": "Found user data in a call to 'eval'. This is extremely dangerous because it can enable an attacker to execute arbitrary remote code on the system. Instead, refactor your code to not use 'eval' and instead use a safe library for the specific functionality you need.\n\n<b>References:</b>\n - [https://nedbatchelder.com/blog/201206/eval_really_is_dangerous.html](https://nedbatchelder.com/blog/201206/eval_really_is_dangerous.html)\n - [https://owasp.org/www-community/attacks/Code_Injection](https://owasp.org/www-community/attacks/Code_Injection)\n",
+        "text": "Found user data in a call to 'eval'. This is extremely dangerous because it can enable an attacker to execute arbitrary remote code on the system. Instead, refactor your code to not use 'eval' and instead use a safe library for the specific functionality you need."
+       },
+       "id": "python.django.security.injection.code.user-eval",
+       "name": "python.django.security.injection.code.user-eval",
+       "properties": {
+        "precision": "very-high",
+        "tags": [
+         "CWE-95: Improper Neutralization of Directives in Dynamically Evaluated Code ('Eval Injection')",
+         "MEDIUM CONFIDENCE",
+         "OWASP-A03:2021 - Injection",
+         "security"
+        ]
+       },
+       "shortDescription": {
+        "text": "Opengrep Finding: python.django.security.injection.code.user-eval"
+       }
+      },
+      {
+       "defaultConfiguration": {
+        "level": "error"
+       },
+       "fullDescription": {
+        "text": "Detected user data flowing into eval. This is code injection and should be avoided."
+       },
+       "help": {
+        "markdown": "Detected user data flowing into eval. This is code injection and should be avoided.\n\n<b>References:</b>\n - [https://nedbatchelder.com/blog/201206/eval_really_is_dangerous.html](https://nedbatchelder.com/blog/201206/eval_really_is_dangerous.html)\n",
+        "text": "Detected user data flowing into eval. This is code injection and should be avoided."
+       },
+       "id": "python.flask.security.injection.eval-injection",
+       "name": "python.flask.security.injection.eval-injection",
+       "properties": {
+        "precision": "very-high",
+        "tags": [
+         "CWE-95: Improper Neutralization of Directives in Dynamically Evaluated Code ('Eval Injection')",
+         "MEDIUM CONFIDENCE",
+         "OWASP-A03:2021 - Injection",
+         "security"
+        ]
+       },
+       "shortDescription": {
+        "text": "Opengrep Finding: python.flask.security.injection.eval-injection"
+       }
+      },
+      {
+       "defaultConfiguration": {
+        "level": "error"
+       },
+       "fullDescription": {
+        "text": "Detected user input entering a `subprocess` call unsafely. This could result in a command injection vulnerability. An attacker could use this vulnerability to execute arbitrary commands on the host, which allows them to download malware, scan sensitive data, or run any command they wish on the server. Do not let users choose the command to run. In general, prefer to use Python API versions of system commands. If you must use subprocess, use a dictionary to allowlist a set of commands."
+       },
+       "help": {
+        "markdown": "Detected user input entering a `subprocess` call unsafely. This could result in a command injection vulnerability. An attacker could use this vulnerability to execute arbitrary commands on the host, which allows them to download malware, scan sensitive data, or run any command they wish on the server. Do not let users choose the command to run. In general, prefer to use Python API versions of system commands. If you must use subprocess, use a dictionary to allowlist a set of commands.\n\n<b>References:</b>\n - [https://semgrep.dev/docs/cheat-sheets/python-command-injection/](https://semgrep.dev/docs/cheat-sheets/python-command-injection/)\n",
+        "text": "Detected user input entering a `subprocess` call unsafely. This could result in a command injection vulnerability. An attacker could use this vulnerability to execute arbitrary commands on the host, which allows them to download malware, scan sensitive data, or run any command they wish on the server. Do not let users choose the command to run. In general, prefer to use Python API versions of system commands. If you must use subprocess, use a dictionary to allowlist a set of commands."
+       },
+       "id": "python.flask.security.injection.subprocess-injection",
+       "name": "python.flask.security.injection.subprocess-injection",
+       "properties": {
+        "precision": "very-high",
+        "tags": [
+         "CWE-78: Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection')",
+         "HIGH CONFIDENCE",
+         "OWASP-A01:2017 - Injection",
+         "OWASP-A03:2021 - Injection",
+         "security"
+        ]
+       },
+       "shortDescription": {
+        "text": "Opengrep Finding: python.flask.security.injection.subprocess-injection"
+       }
+      },
+      {
+       "defaultConfiguration": {
+        "level": "error"
+       },
+       "fullDescription": {
+        "text": "Detected subprocess function '$FUNC' without a static string. If this data can be controlled by a malicious actor, it may be an instance of command injection. Audit the use of this call to ensure it is not controllable by an external resource. You may consider using 'shlex.escape()'."
+       },
+       "help": {
+        "markdown": "Detected subprocess function '$FUNC' without a static string. If this data can be controlled by a malicious actor, it may be an instance of command injection. Audit the use of this call to ensure it is not controllable by an external resource. You may consider using 'shlex.escape()'.\n\n<b>References:</b>\n - [https://stackoverflow.com/questions/3172470/actual-meaning-of-shell-true-in-subprocess](https://stackoverflow.com/questions/3172470/actual-meaning-of-shell-true-in-subprocess)\n - [https://docs.python.org/3/library/subprocess.html](https://docs.python.org/3/library/subprocess.html)\n - [https://docs.python.org/3/library/shlex.html](https://docs.python.org/3/library/shlex.html)\n - [https://semgrep.dev/docs/cheat-sheets/python-command-injection/](https://semgrep.dev/docs/cheat-sheets/python-command-injection/)\n",
+        "text": "Detected subprocess function '$FUNC' without a static string. If this data can be controlled by a malicious actor, it may be an instance of command injection. Audit the use of this call to ensure it is not controllable by an external resource. You may consider using 'shlex.escape()'."
+       },
+       "id": "python.lang.security.audit.dangerous-subprocess-use-audit",
+       "name": "python.lang.security.audit.dangerous-subprocess-use-audit",
+       "properties": {
+        "precision": "very-high",
+        "tags": [
+         "CWE-78: Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection')",
+         "LOW CONFIDENCE",
+         "OWASP-A01:2017 - Injection",
+         "OWASP-A03:2021 - Injection",
+         "security"
+        ]
+       },
+       "shortDescription": {
+        "text": "Opengrep Finding: python.lang.security.audit.dangerous-subprocess-use-audit"
+       }
+      },
+      {
+       "defaultConfiguration": {
+        "level": "warning"
+       },
+       "fullDescription": {
+        "text": "Detected the use of eval(). eval() can be dangerous if used to evaluate dynamic content. If this content can be input from outside the program, this may be a code injection vulnerability. Ensure evaluated content is not definable by external sources."
+       },
+       "help": {
+        "markdown": "Detected the use of eval(). eval() can be dangerous if used to evaluate dynamic content. If this content can be input from outside the program, this may be a code injection vulnerability. Ensure evaluated content is not definable by external sources.\n\n<b>References:</b>\n - [https://owasp.org/Top10/A03_2021-Injection](https://owasp.org/Top10/A03_2021-Injection)\n",
+        "text": "Detected the use of eval(). eval() can be dangerous if used to evaluate dynamic content. If this content can be input from outside the program, this may be a code injection vulnerability. Ensure evaluated content is not definable by external sources."
+       },
+       "id": "python.lang.security.audit.eval-detected",
+       "name": "python.lang.security.audit.eval-detected",
+       "properties": {
+        "precision": "very-high",
+        "tags": [
+         "CWE-95: Improper Neutralization of Directives in Dynamically Evaluated Code ('Eval Injection')",
+         "LOW CONFIDENCE",
+         "OWASP-A03:2021 - Injection",
+         "security"
+        ]
+       },
+       "shortDescription": {
+        "text": "Opengrep Finding: python.lang.security.audit.eval-detected"
+       }
+      },
+      {
+       "defaultConfiguration": {
+        "level": "error"
+       },
+       "fullDescription": {
+        "text": "Found 'subprocess' function '$FUNC' with 'shell=True'. This is dangerous because this call will spawn the command using a shell process. Doing so propagates current shell settings and variables, which makes it much easier for a malicious actor to execute commands. Use 'shell=False' instead."
+       },
+       "help": {
+        "markdown": "Found 'subprocess' function '$FUNC' with 'shell=True'. This is dangerous because this call will spawn the command using a shell process. Doing so propagates current shell settings and variables, which makes it much easier for a malicious actor to execute commands. Use 'shell=False' instead.\n\n<b>References:</b>\n - [https://stackoverflow.com/questions/3172470/actual-meaning-of-shell-true-in-subprocess](https://stackoverflow.com/questions/3172470/actual-meaning-of-shell-true-in-subprocess)\n - [https://docs.python.org/3/library/subprocess.html](https://docs.python.org/3/library/subprocess.html)\n",
+        "text": "Found 'subprocess' function '$FUNC' with 'shell=True'. This is dangerous because this call will spawn the command using a shell process. Doing so propagates current shell settings and variables, which makes it much easier for a malicious actor to execute commands. Use 'shell=False' instead."
+       },
+       "id": "python.lang.security.audit.subprocess-shell-true",
+       "name": "python.lang.security.audit.subprocess-shell-true",
+       "properties": {
+        "precision": "very-high",
+        "tags": [
+         "CWE-78: Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection')",
+         "MEDIUM CONFIDENCE",
+         "OWASP-A01:2017 - Injection",
+         "OWASP-A03:2021 - Injection",
+         "security"
+        ]
+       },
+       "shortDescription": {
+        "text": "Opengrep Finding: python.lang.security.audit.subprocess-shell-true"
+       }
+      },
+      {
+       "defaultConfiguration": {
+        "level": "error"
+       },
+       "fullDescription": {
+        "text": "Detected subprocess function '$FUNC' with user controlled data. A malicious actor could leverage this to perform command injection. You may consider using 'shlex.escape()'."
+       },
+       "help": {
+        "markdown": "Detected subprocess function '$FUNC' with user controlled data. A malicious actor could leverage this to perform command injection. You may consider using 'shlex.escape()'.\n\n<b>References:</b>\n - [https://stackoverflow.com/questions/3172470/actual-meaning-of-shell-true-in-subprocess](https://stackoverflow.com/questions/3172470/actual-meaning-of-shell-true-in-subprocess)\n - [https://docs.python.org/3/library/subprocess.html](https://docs.python.org/3/library/subprocess.html)\n - [https://docs.python.org/3/library/shlex.html](https://docs.python.org/3/library/shlex.html)\n - [https://semgrep.dev/docs/cheat-sheets/python-command-injection/](https://semgrep.dev/docs/cheat-sheets/python-command-injection/)\n",
+        "text": "Detected subprocess function '$FUNC' with user controlled data. A malicious actor could leverage this to perform command injection. You may consider using 'shlex.escape()'."
+       },
+       "id": "python.lang.security.dangerous-subprocess-use",
+       "name": "python.lang.security.dangerous-subprocess-use",
+       "properties": {
+        "precision": "very-high",
+        "tags": [
+         "CWE-78: Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection')",
+         "MEDIUM CONFIDENCE",
+         "OWASP-A01:2017 - Injection",
+         "OWASP-A03:2021 - Injection",
+         "security"
+        ]
+       },
+       "shortDescription": {
+        "text": "Opengrep Finding: python.lang.security.dangerous-subprocess-use"
+       }
+      },
+      {
+       "defaultConfiguration": {
+        "level": "warning"
+       },
+       "fullDescription": {
+        "text": "Mark sensitive parameters with the @secure() decorator. This avoids logging the value or displaying it in the Azure portal, Azure CLI, or Azure PowerShell."
+       },
+       "help": {
+        "markdown": "Mark sensitive parameters with the @secure() decorator. This avoids logging the value or displaying it in the Azure portal, Azure CLI, or Azure PowerShell.\n\n<b>References:</b>\n - [https://cwe.mitre.org/data/definitions/532.html](https://cwe.mitre.org/data/definitions/532.html)\n - [https://docs.microsoft.com/en-us/azure/azure-resource-manager/bicep/scenarios-secrets](https://docs.microsoft.com/en-us/azure/azure-resource-manager/bicep/scenarios-secrets)\n",
+        "text": "Mark sensitive parameters with the @secure() decorator. This avoids logging the value or displaying it in the Azure portal, Azure CLI, or Azure PowerShell."
+       },
+       "id": "generic.bicep.security.secure-parameter-for-secrets",
+       "name": "generic.bicep.security.secure-parameter-for-secrets",
+       "properties": {
+        "precision": "very-high",
+        "tags": [
+         "CWE-532: Insertion of Sensitive Information into Log File",
+         "LOW CONFIDENCE",
+         "OWASP-A09:2021 - Security Logging and Monitoring Failures",
+         "security"
+        ]
+       },
+       "shortDescription": {
+        "text": "Opengrep Finding: generic.bicep.security.secure-parameter-for-secrets"
+       }
+      },
+      {
+       "defaultConfiguration": {
+        "level": "error"
+       },
+       "fullDescription": {
+        "text": "Semgrep found a bash reverse shell"
+       },
+       "help": {
+        "markdown": "Semgrep found a bash reverse shell\n\n<b>References:</b>\n - [https://owasp.org/Top10/A03_2021-Injection](https://owasp.org/Top10/A03_2021-Injection)\n",
+        "text": "Semgrep found a bash reverse shell"
+       },
+       "id": "generic.ci.security.bash_reverse_shell",
+       "name": "generic.ci.security.bash_reverse_shell",
+       "properties": {
+        "precision": "very-high",
+        "tags": [
+         "CWE-94: Improper Control of Generation of Code ('Code Injection')",
+         "HIGH CONFIDENCE",
+         "OWASP-A03:2021 - Injection",
+         "security"
+        ]
+       },
+       "shortDescription": {
+        "text": "Opengrep Finding: generic.ci.security.bash_reverse_shell"
+       }
+      },
+      {
+       "defaultConfiguration": {
+        "level": "warning"
+       },
+       "fullDescription": {
+        "text": "A secret is hard-coded in the application. Secrets stored in source code, such as credentials, identifiers, and other types of sensitive data, can be leaked and used by internal or external malicious actors. It is recommended to rotate the secret and retrieve them from a secure secret vault or Hardware Security Module (HSM), alternatively environment variables can be used if allowed by your company policy."
+       },
+       "help": {
+        "markdown": "A secret is hard-coded in the application. Secrets stored in source code, such as credentials, identifiers, and other types of sensitive data, can be leaked and used by internal or external malicious actors. It is recommended to rotate the secret and retrieve them from a secure secret vault or Hardware Security Module (HSM), alternatively environment variables can be used if allowed by your company policy.\n\n<b>References:</b>\n - [https://owasp.org/Top10/A07_2021-Identification_and_Authentication_Failures](https://owasp.org/Top10/A07_2021-Identification_and_Authentication_Failures)\n",
+        "text": "A secret is hard-coded in the application. Secrets stored in source code, such as credentials, identifiers, and other types of sensitive data, can be leaked and used by internal or external malicious actors. It is recommended to rotate the secret and retrieve them from a secure secret vault or Hardware Security Module (HSM), alternatively environment variables can be used if allowed by your company policy."
+       },
+       "id": "generic.gradle.security.build-gradle-password-hardcoded",
+       "name": "generic.gradle.security.build-gradle-password-hardcoded",
+       "properties": {
+        "precision": "very-high",
+        "tags": [
+         "CWE-798: Use of Hard-coded Credentials",
+         "LOW CONFIDENCE",
+         "OWASP-A07:2021 - Identification and Authentication Failures",
+         "security"
+        ]
+       },
+       "shortDescription": {
+        "text": "Opengrep Finding: generic.gradle.security.build-gradle-password-hardcoded"
+       }
+      }
+     ],
+     "semanticVersion": "1.29.0"
+    }
+   }
+  }
+ ],
+ "$schema": "https://docs.oasis-open.org/sarif/sarif/v2.1.0/os/schemas/sarif-schema-2.1.0.json"
+}

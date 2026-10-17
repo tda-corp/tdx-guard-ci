@@ -1,0 +1,2150 @@
+{
+ "bomFormat": "CycloneDX",
+ "specVersion": "1.7",
+ "vulnerabilities": [
+  {
+   "id": "CVE-2018-25032",
+   "ratings": [
+    {
+     "source": {
+      "name": "alma"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "amazon"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "azure"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "cbl-mariner"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "ghsa"
+     },
+     "score": 7.5,
+     "severity": "high",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+    },
+    {
+     "source": {
+      "name": "julia"
+     },
+     "score": 7.5,
+     "severity": "high",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+    },
+    {
+     "source": {
+      "name": "nvd"
+     },
+     "score": 5,
+     "severity": "medium",
+     "method": "CVSSv2",
+     "vector": "AV:N/AC:L/Au:N/C:N/I:N/A:P"
+    },
+    {
+     "source": {
+      "name": "nvd"
+     },
+     "score": 7.5,
+     "severity": "high",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+    },
+    {
+     "source": {
+      "name": "oracle-oval"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "photon"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "redhat"
+     },
+     "score": 8.2,
+     "severity": "high",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:H"
+    },
+    {
+     "source": {
+      "name": "ruby-advisory-db"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "ubuntu"
+     },
+     "severity": "medium"
+    }
+   ],
+   "recommendation": "Upgrade zlib to version 1.2.12-r0",
+   "affects": [
+    {
+     "ref": "pkg:apk/alpine/zlib@1.2.11-r3?arch=aarch64&distro=3.14.0",
+     "versions": [
+      {
+       "version": "1.2.11-r3",
+       "status": "affected"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "CVE-2021-36159",
+   "ratings": [
+    {
+     "source": {
+      "name": "nvd"
+     },
+     "score": 6.4,
+     "severity": "medium",
+     "method": "CVSSv2",
+     "vector": "AV:N/AC:L/Au:N/C:P/I:N/A:P"
+    },
+    {
+     "source": {
+      "name": "nvd"
+     },
+     "score": 9.1,
+     "severity": "critical",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:H"
+    },
+    {
+     "source": {
+      "name": "redhat"
+     },
+     "score": 9.1,
+     "severity": "high",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:H"
+    }
+   ],
+   "recommendation": "Upgrade apk-tools to version 2.12.6-r0",
+   "affects": [
+    {
+     "ref": "pkg:apk/alpine/apk-tools@2.12.5-r1?arch=aarch64&distro=3.14.0",
+     "versions": [
+      {
+       "version": "2.12.5-r1",
+       "status": "affected"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "CVE-2021-3711",
+   "ratings": [
+    {
+     "source": {
+      "name": "azure"
+     },
+     "severity": "critical"
+    },
+    {
+     "source": {
+      "name": "cbl-mariner"
+     },
+     "severity": "critical"
+    },
+    {
+     "source": {
+      "name": "ghsa"
+     },
+     "score": 9.8,
+     "severity": "critical",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+    },
+    {
+     "source": {
+      "name": "julia"
+     },
+     "score": 9.8,
+     "severity": "critical",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+    },
+    {
+     "source": {
+      "name": "nvd"
+     },
+     "score": 7.5,
+     "severity": "high",
+     "method": "CVSSv2",
+     "vector": "AV:N/AC:L/Au:N/C:P/I:P/A:P"
+    },
+    {
+     "source": {
+      "name": "nvd"
+     },
+     "score": 9.8,
+     "severity": "critical",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+    },
+    {
+     "source": {
+      "name": "photon"
+     },
+     "severity": "critical"
+    },
+    {
+     "source": {
+      "name": "redhat"
+     },
+     "score": 9.8,
+     "severity": "high",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+    },
+    {
+     "source": {
+      "name": "ubuntu"
+     },
+     "severity": "high"
+    }
+   ],
+   "recommendation": "Upgrade libcrypto1.1 to version 1.1.1l-r0; Upgrade libssl1.1 to version 1.1.1l-r0",
+   "affects": [
+    {
+     "ref": "pkg:apk/alpine/libcrypto1.1@1.1.1k-r0?arch=aarch64&distro=3.14.0",
+     "versions": [
+      {
+       "version": "1.1.1k-r0",
+       "status": "affected"
+      }
+     ]
+    },
+    {
+     "ref": "pkg:apk/alpine/libssl1.1@1.1.1k-r0?arch=aarch64&distro=3.14.0",
+     "versions": [
+      {
+       "version": "1.1.1k-r0",
+       "status": "affected"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "CVE-2021-3712",
+   "ratings": [
+    {
+     "source": {
+      "name": "amazon"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "azure"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "cbl-mariner"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "ghsa"
+     },
+     "score": 7.4,
+     "severity": "high",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:H"
+    },
+    {
+     "source": {
+      "name": "julia"
+     },
+     "score": 7.4,
+     "severity": "high",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:H"
+    },
+    {
+     "source": {
+      "name": "nvd"
+     },
+     "score": 5.8,
+     "severity": "medium",
+     "method": "CVSSv2",
+     "vector": "AV:N/AC:M/Au:N/C:P/I:N/A:P"
+    },
+    {
+     "source": {
+      "name": "nvd"
+     },
+     "score": 7.4,
+     "severity": "high",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:H"
+    },
+    {
+     "source": {
+      "name": "oracle-oval"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "photon"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "redhat"
+     },
+     "score": 7.4,
+     "severity": "medium",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:H"
+    },
+    {
+     "source": {
+      "name": "rocky"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "ubuntu"
+     },
+     "severity": "medium"
+    }
+   ],
+   "recommendation": "Upgrade libcrypto1.1 to version 1.1.1l-r0; Upgrade libssl1.1 to version 1.1.1l-r0",
+   "affects": [
+    {
+     "ref": "pkg:apk/alpine/libcrypto1.1@1.1.1k-r0?arch=aarch64&distro=3.14.0",
+     "versions": [
+      {
+       "version": "1.1.1k-r0",
+       "status": "affected"
+      }
+     ]
+    },
+    {
+     "ref": "pkg:apk/alpine/libssl1.1@1.1.1k-r0?arch=aarch64&distro=3.14.0",
+     "versions": [
+      {
+       "version": "1.1.1k-r0",
+       "status": "affected"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "CVE-2021-42374",
+   "ratings": [
+    {
+     "source": {
+      "name": "azure"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "cbl-mariner"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "nvd"
+     },
+     "score": 3.3,
+     "severity": "info",
+     "method": "CVSSv2",
+     "vector": "AV:L/AC:M/Au:N/C:P/I:N/A:P"
+    },
+    {
+     "source": {
+      "name": "nvd"
+     },
+     "score": 5.3,
+     "severity": "medium",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:L/I:N/A:H"
+    },
+    {
+     "source": {
+      "name": "redhat"
+     },
+     "score": 5.7,
+     "severity": "medium",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:L/AC:H/PR:N/UI:N/S:U/C:L/I:N/A:H"
+    },
+    {
+     "source": {
+      "name": "ubuntu"
+     },
+     "severity": "low"
+    }
+   ],
+   "recommendation": "Upgrade busybox to version 1.33.1-r4; Upgrade ssl_client to version 1.33.1-r4",
+   "affects": [
+    {
+     "ref": "pkg:apk/alpine/busybox@1.33.1-r2?arch=aarch64&distro=3.14.0",
+     "versions": [
+      {
+       "version": "1.33.1-r2",
+       "status": "affected"
+      }
+     ]
+    },
+    {
+     "ref": "pkg:apk/alpine/ssl_client@1.33.1-r2?arch=aarch64&distro=3.14.0",
+     "versions": [
+      {
+       "version": "1.33.1-r2",
+       "status": "affected"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "CVE-2021-42375",
+   "ratings": [
+    {
+     "source": {
+      "name": "nvd"
+     },
+     "score": 1.9,
+     "severity": "info",
+     "method": "CVSSv2",
+     "vector": "AV:L/AC:M/Au:N/C:N/I:N/A:P"
+    },
+    {
+     "source": {
+      "name": "nvd"
+     },
+     "score": 5.5,
+     "severity": "medium",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:N/I:N/A:H"
+    },
+    {
+     "source": {
+      "name": "redhat"
+     },
+     "score": 4.1,
+     "severity": "medium",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:L/AC:H/PR:H/UI:N/S:U/C:N/I:N/A:H"
+    }
+   ],
+   "recommendation": "Upgrade busybox to version 1.33.1-r5; Upgrade ssl_client to version 1.33.1-r5",
+   "affects": [
+    {
+     "ref": "pkg:apk/alpine/busybox@1.33.1-r2?arch=aarch64&distro=3.14.0",
+     "versions": [
+      {
+       "version": "1.33.1-r2",
+       "status": "affected"
+      }
+     ]
+    },
+    {
+     "ref": "pkg:apk/alpine/ssl_client@1.33.1-r2?arch=aarch64&distro=3.14.0",
+     "versions": [
+      {
+       "version": "1.33.1-r2",
+       "status": "affected"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "CVE-2021-42378",
+   "ratings": [
+    {
+     "source": {
+      "name": "amazon"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "cbl-mariner"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "nvd"
+     },
+     "score": 6.5,
+     "severity": "medium",
+     "method": "CVSSv2",
+     "vector": "AV:N/AC:L/Au:S/C:P/I:P/A:P"
+    },
+    {
+     "source": {
+      "name": "nvd"
+     },
+     "score": 7.2,
+     "severity": "high",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:H/UI:N/S:U/C:H/I:H/A:H"
+    },
+    {
+     "source": {
+      "name": "redhat"
+     },
+     "score": 6.6,
+     "severity": "medium",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:H/PR:H/UI:N/S:U/C:H/I:H/A:H"
+    },
+    {
+     "source": {
+      "name": "ubuntu"
+     },
+     "severity": "low"
+    }
+   ],
+   "recommendation": "Upgrade busybox to version 1.33.1-r6; Upgrade ssl_client to version 1.33.1-r6",
+   "affects": [
+    {
+     "ref": "pkg:apk/alpine/busybox@1.33.1-r2?arch=aarch64&distro=3.14.0",
+     "versions": [
+      {
+       "version": "1.33.1-r2",
+       "status": "affected"
+      }
+     ]
+    },
+    {
+     "ref": "pkg:apk/alpine/ssl_client@1.33.1-r2?arch=aarch64&distro=3.14.0",
+     "versions": [
+      {
+       "version": "1.33.1-r2",
+       "status": "affected"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "CVE-2021-42379",
+   "ratings": [
+    {
+     "source": {
+      "name": "amazon"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "cbl-mariner"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "nvd"
+     },
+     "score": 6.5,
+     "severity": "medium",
+     "method": "CVSSv2",
+     "vector": "AV:N/AC:L/Au:S/C:P/I:P/A:P"
+    },
+    {
+     "source": {
+      "name": "nvd"
+     },
+     "score": 7.2,
+     "severity": "high",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:H/UI:N/S:U/C:H/I:H/A:H"
+    },
+    {
+     "source": {
+      "name": "redhat"
+     },
+     "score": 6.6,
+     "severity": "medium",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:H/PR:H/UI:N/S:U/C:H/I:H/A:H"
+    },
+    {
+     "source": {
+      "name": "ubuntu"
+     },
+     "severity": "low"
+    }
+   ],
+   "recommendation": "Upgrade busybox to version 1.33.1-r6; Upgrade ssl_client to version 1.33.1-r6",
+   "affects": [
+    {
+     "ref": "pkg:apk/alpine/busybox@1.33.1-r2?arch=aarch64&distro=3.14.0",
+     "versions": [
+      {
+       "version": "1.33.1-r2",
+       "status": "affected"
+      }
+     ]
+    },
+    {
+     "ref": "pkg:apk/alpine/ssl_client@1.33.1-r2?arch=aarch64&distro=3.14.0",
+     "versions": [
+      {
+       "version": "1.33.1-r2",
+       "status": "affected"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "CVE-2021-42380",
+   "ratings": [
+    {
+     "source": {
+      "name": "cbl-mariner"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "nvd"
+     },
+     "score": 6.5,
+     "severity": "medium",
+     "method": "CVSSv2",
+     "vector": "AV:N/AC:L/Au:S/C:P/I:P/A:P"
+    },
+    {
+     "source": {
+      "name": "nvd"
+     },
+     "score": 7.2,
+     "severity": "high",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:H/UI:N/S:U/C:H/I:H/A:H"
+    },
+    {
+     "source": {
+      "name": "redhat"
+     },
+     "score": 6.6,
+     "severity": "medium",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:H/PR:H/UI:N/S:U/C:H/I:H/A:H"
+    },
+    {
+     "source": {
+      "name": "ubuntu"
+     },
+     "severity": "low"
+    }
+   ],
+   "recommendation": "Upgrade busybox to version 1.33.1-r6; Upgrade ssl_client to version 1.33.1-r6",
+   "affects": [
+    {
+     "ref": "pkg:apk/alpine/busybox@1.33.1-r2?arch=aarch64&distro=3.14.0",
+     "versions": [
+      {
+       "version": "1.33.1-r2",
+       "status": "affected"
+      }
+     ]
+    },
+    {
+     "ref": "pkg:apk/alpine/ssl_client@1.33.1-r2?arch=aarch64&distro=3.14.0",
+     "versions": [
+      {
+       "version": "1.33.1-r2",
+       "status": "affected"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "CVE-2021-42381",
+   "ratings": [
+    {
+     "source": {
+      "name": "cbl-mariner"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "nvd"
+     },
+     "score": 6.5,
+     "severity": "medium",
+     "method": "CVSSv2",
+     "vector": "AV:N/AC:L/Au:S/C:P/I:P/A:P"
+    },
+    {
+     "source": {
+      "name": "nvd"
+     },
+     "score": 7.2,
+     "severity": "high",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:H/UI:N/S:U/C:H/I:H/A:H"
+    },
+    {
+     "source": {
+      "name": "redhat"
+     },
+     "score": 6.6,
+     "severity": "medium",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:H/PR:H/UI:N/S:U/C:H/I:H/A:H"
+    },
+    {
+     "source": {
+      "name": "ubuntu"
+     },
+     "severity": "low"
+    }
+   ],
+   "recommendation": "Upgrade busybox to version 1.33.1-r6; Upgrade ssl_client to version 1.33.1-r6",
+   "affects": [
+    {
+     "ref": "pkg:apk/alpine/busybox@1.33.1-r2?arch=aarch64&distro=3.14.0",
+     "versions": [
+      {
+       "version": "1.33.1-r2",
+       "status": "affected"
+      }
+     ]
+    },
+    {
+     "ref": "pkg:apk/alpine/ssl_client@1.33.1-r2?arch=aarch64&distro=3.14.0",
+     "versions": [
+      {
+       "version": "1.33.1-r2",
+       "status": "affected"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "CVE-2021-42382",
+   "ratings": [
+    {
+     "source": {
+      "name": "cbl-mariner"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "nvd"
+     },
+     "score": 6.5,
+     "severity": "medium",
+     "method": "CVSSv2",
+     "vector": "AV:N/AC:L/Au:S/C:P/I:P/A:P"
+    },
+    {
+     "source": {
+      "name": "nvd"
+     },
+     "score": 7.2,
+     "severity": "high",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:H/UI:N/S:U/C:H/I:H/A:H"
+    },
+    {
+     "source": {
+      "name": "redhat"
+     },
+     "score": 6.6,
+     "severity": "medium",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:H/PR:H/UI:N/S:U/C:H/I:H/A:H"
+    },
+    {
+     "source": {
+      "name": "ubuntu"
+     },
+     "severity": "low"
+    }
+   ],
+   "recommendation": "Upgrade busybox to version 1.33.1-r6; Upgrade ssl_client to version 1.33.1-r6",
+   "affects": [
+    {
+     "ref": "pkg:apk/alpine/busybox@1.33.1-r2?arch=aarch64&distro=3.14.0",
+     "versions": [
+      {
+       "version": "1.33.1-r2",
+       "status": "affected"
+      }
+     ]
+    },
+    {
+     "ref": "pkg:apk/alpine/ssl_client@1.33.1-r2?arch=aarch64&distro=3.14.0",
+     "versions": [
+      {
+       "version": "1.33.1-r2",
+       "status": "affected"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "CVE-2021-42383",
+   "ratings": [
+    {
+     "source": {
+      "name": "nvd"
+     },
+     "score": 6.5,
+     "severity": "medium",
+     "method": "CVSSv2",
+     "vector": "AV:N/AC:L/Au:S/C:P/I:P/A:P"
+    },
+    {
+     "source": {
+      "name": "nvd"
+     },
+     "score": 7.2,
+     "severity": "high",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:H/UI:N/S:U/C:H/I:H/A:H"
+    },
+    {
+     "source": {
+      "name": "redhat"
+     },
+     "score": 6.6,
+     "severity": "medium",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:H/PR:H/UI:N/S:U/C:H/I:H/A:H"
+    }
+   ],
+   "recommendation": "Upgrade busybox to version 1.33.1-r6; Upgrade ssl_client to version 1.33.1-r6",
+   "affects": [
+    {
+     "ref": "pkg:apk/alpine/busybox@1.33.1-r2?arch=aarch64&distro=3.14.0",
+     "versions": [
+      {
+       "version": "1.33.1-r2",
+       "status": "affected"
+      }
+     ]
+    },
+    {
+     "ref": "pkg:apk/alpine/ssl_client@1.33.1-r2?arch=aarch64&distro=3.14.0",
+     "versions": [
+      {
+       "version": "1.33.1-r2",
+       "status": "affected"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "CVE-2021-42384",
+   "ratings": [
+    {
+     "source": {
+      "name": "amazon"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "cbl-mariner"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "nvd"
+     },
+     "score": 6.5,
+     "severity": "medium",
+     "method": "CVSSv2",
+     "vector": "AV:N/AC:L/Au:S/C:P/I:P/A:P"
+    },
+    {
+     "source": {
+      "name": "nvd"
+     },
+     "score": 7.2,
+     "severity": "high",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:H/UI:N/S:U/C:H/I:H/A:H"
+    },
+    {
+     "source": {
+      "name": "redhat"
+     },
+     "score": 6.6,
+     "severity": "medium",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:H/PR:H/UI:N/S:U/C:H/I:H/A:H"
+    },
+    {
+     "source": {
+      "name": "ubuntu"
+     },
+     "severity": "low"
+    }
+   ],
+   "recommendation": "Upgrade busybox to version 1.33.1-r6; Upgrade ssl_client to version 1.33.1-r6",
+   "affects": [
+    {
+     "ref": "pkg:apk/alpine/busybox@1.33.1-r2?arch=aarch64&distro=3.14.0",
+     "versions": [
+      {
+       "version": "1.33.1-r2",
+       "status": "affected"
+      }
+     ]
+    },
+    {
+     "ref": "pkg:apk/alpine/ssl_client@1.33.1-r2?arch=aarch64&distro=3.14.0",
+     "versions": [
+      {
+       "version": "1.33.1-r2",
+       "status": "affected"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "CVE-2021-42385",
+   "ratings": [
+    {
+     "source": {
+      "name": "amazon"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "cbl-mariner"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "nvd"
+     },
+     "score": 6.5,
+     "severity": "medium",
+     "method": "CVSSv2",
+     "vector": "AV:N/AC:L/Au:S/C:P/I:P/A:P"
+    },
+    {
+     "source": {
+      "name": "nvd"
+     },
+     "score": 7.2,
+     "severity": "high",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:H/UI:N/S:U/C:H/I:H/A:H"
+    },
+    {
+     "source": {
+      "name": "redhat"
+     },
+     "score": 6.6,
+     "severity": "medium",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:H/PR:H/UI:N/S:U/C:H/I:H/A:H"
+    },
+    {
+     "source": {
+      "name": "ubuntu"
+     },
+     "severity": "low"
+    }
+   ],
+   "recommendation": "Upgrade busybox to version 1.33.1-r6; Upgrade ssl_client to version 1.33.1-r6",
+   "affects": [
+    {
+     "ref": "pkg:apk/alpine/busybox@1.33.1-r2?arch=aarch64&distro=3.14.0",
+     "versions": [
+      {
+       "version": "1.33.1-r2",
+       "status": "affected"
+      }
+     ]
+    },
+    {
+     "ref": "pkg:apk/alpine/ssl_client@1.33.1-r2?arch=aarch64&distro=3.14.0",
+     "versions": [
+      {
+       "version": "1.33.1-r2",
+       "status": "affected"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "CVE-2021-42386",
+   "ratings": [
+    {
+     "source": {
+      "name": "amazon"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "cbl-mariner"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "nvd"
+     },
+     "score": 6.5,
+     "severity": "medium",
+     "method": "CVSSv2",
+     "vector": "AV:N/AC:L/Au:S/C:P/I:P/A:P"
+    },
+    {
+     "source": {
+      "name": "nvd"
+     },
+     "score": 7.2,
+     "severity": "high",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:H/UI:N/S:U/C:H/I:H/A:H"
+    },
+    {
+     "source": {
+      "name": "redhat"
+     },
+     "score": 6.6,
+     "severity": "medium",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:H/PR:H/UI:N/S:U/C:H/I:H/A:H"
+    },
+    {
+     "source": {
+      "name": "ubuntu"
+     },
+     "severity": "low"
+    }
+   ],
+   "recommendation": "Upgrade busybox to version 1.33.1-r6; Upgrade ssl_client to version 1.33.1-r6",
+   "affects": [
+    {
+     "ref": "pkg:apk/alpine/busybox@1.33.1-r2?arch=aarch64&distro=3.14.0",
+     "versions": [
+      {
+       "version": "1.33.1-r2",
+       "status": "affected"
+      }
+     ]
+    },
+    {
+     "ref": "pkg:apk/alpine/ssl_client@1.33.1-r2?arch=aarch64&distro=3.14.0",
+     "versions": [
+      {
+       "version": "1.33.1-r2",
+       "status": "affected"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "CVE-2022-0778",
+   "ratings": [
+    {
+     "source": {
+      "name": "alma"
+     },
+     "severity": "low"
+    },
+    {
+     "source": {
+      "name": "amazon"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "azure"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "bitnami"
+     },
+     "score": 7.5,
+     "severity": "high",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+    },
+    {
+     "source": {
+      "name": "cbl-mariner"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "ghsa"
+     },
+     "score": 7.5,
+     "severity": "high",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+    },
+    {
+     "source": {
+      "name": "julia"
+     },
+     "score": 7.5,
+     "severity": "high",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+    },
+    {
+     "source": {
+      "name": "nvd"
+     },
+     "score": 5,
+     "severity": "medium",
+     "method": "CVSSv2",
+     "vector": "AV:N/AC:L/Au:N/C:N/I:N/A:P"
+    },
+    {
+     "source": {
+      "name": "nvd"
+     },
+     "score": 7.5,
+     "severity": "high",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+    },
+    {
+     "source": {
+      "name": "oracle-oval"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "photon"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "redhat"
+     },
+     "score": 7.5,
+     "severity": "high",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+    },
+    {
+     "source": {
+      "name": "rocky"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "ubuntu"
+     },
+     "severity": "high"
+    }
+   ],
+   "recommendation": "Upgrade libcrypto1.1 to version 1.1.1n-r0; Upgrade libretls to version 3.3.3p1-r3; Upgrade libssl1.1 to version 1.1.1n-r0",
+   "affects": [
+    {
+     "ref": "pkg:apk/alpine/libcrypto1.1@1.1.1k-r0?arch=aarch64&distro=3.14.0",
+     "versions": [
+      {
+       "version": "1.1.1k-r0",
+       "status": "affected"
+      }
+     ]
+    },
+    {
+     "ref": "pkg:apk/alpine/libretls@3.3.3-r0?arch=aarch64&distro=3.14.0",
+     "versions": [
+      {
+       "version": "3.3.3-r0",
+       "status": "affected"
+      }
+     ]
+    },
+    {
+     "ref": "pkg:apk/alpine/libssl1.1@1.1.1k-r0?arch=aarch64&distro=3.14.0",
+     "versions": [
+      {
+       "version": "1.1.1k-r0",
+       "status": "affected"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "CVE-2022-2097",
+   "ratings": [
+    {
+     "source": {
+      "name": "alma"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "amazon"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "azure"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "cbl-mariner"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "ghsa"
+     },
+     "score": 7.5,
+     "severity": "high",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+    },
+    {
+     "source": {
+      "name": "julia"
+     },
+     "score": 5.3,
+     "severity": "medium",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N"
+    },
+    {
+     "source": {
+      "name": "nvd"
+     },
+     "score": 5,
+     "severity": "medium",
+     "method": "CVSSv2",
+     "vector": "AV:N/AC:L/Au:N/C:P/I:N/A:N"
+    },
+    {
+     "source": {
+      "name": "nvd"
+     },
+     "score": 5.3,
+     "severity": "medium",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N"
+    },
+    {
+     "source": {
+      "name": "oracle-oval"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "photon"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "redhat"
+     },
+     "score": 5.3,
+     "severity": "medium",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N"
+    },
+    {
+     "source": {
+      "name": "rocky"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "ubuntu"
+     },
+     "severity": "medium"
+    }
+   ],
+   "recommendation": "Upgrade libcrypto1.1 to version 1.1.1q-r0; Upgrade libssl1.1 to version 1.1.1q-r0",
+   "affects": [
+    {
+     "ref": "pkg:apk/alpine/libcrypto1.1@1.1.1k-r0?arch=aarch64&distro=3.14.0",
+     "versions": [
+      {
+       "version": "1.1.1k-r0",
+       "status": "affected"
+      }
+     ]
+    },
+    {
+     "ref": "pkg:apk/alpine/libssl1.1@1.1.1k-r0?arch=aarch64&distro=3.14.0",
+     "versions": [
+      {
+       "version": "1.1.1k-r0",
+       "status": "affected"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "CVE-2022-28391",
+   "ratings": [
+    {
+     "source": {
+      "name": "amazon"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "azure"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "cbl-mariner"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "nvd"
+     },
+     "score": 6.8,
+     "severity": "medium",
+     "method": "CVSSv2",
+     "vector": "AV:N/AC:M/Au:N/C:P/I:P/A:P"
+    },
+    {
+     "source": {
+      "name": "nvd"
+     },
+     "score": 8.8,
+     "severity": "high",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H"
+    },
+    {
+     "source": {
+      "name": "redhat"
+     },
+     "score": 6.5,
+     "severity": "medium",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:N/I:H/A:N"
+    }
+   ],
+   "recommendation": "Upgrade busybox to version 1.33.1-r7; Upgrade ssl_client to version 1.33.1-r7",
+   "affects": [
+    {
+     "ref": "pkg:apk/alpine/busybox@1.33.1-r2?arch=aarch64&distro=3.14.0",
+     "versions": [
+      {
+       "version": "1.33.1-r2",
+       "status": "affected"
+      }
+     ]
+    },
+    {
+     "ref": "pkg:apk/alpine/ssl_client@1.33.1-r2?arch=aarch64&distro=3.14.0",
+     "versions": [
+      {
+       "version": "1.33.1-r2",
+       "status": "affected"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "CVE-2022-37434",
+   "ratings": [
+    {
+     "source": {
+      "name": "alma"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "amazon"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "azure"
+     },
+     "severity": "critical"
+    },
+    {
+     "source": {
+      "name": "bottlerocket"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "cbl-mariner"
+     },
+     "severity": "critical"
+    },
+    {
+     "source": {
+      "name": "julia"
+     },
+     "score": 9.8,
+     "severity": "critical",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+    },
+    {
+     "source": {
+      "name": "nvd"
+     },
+     "score": 9.8,
+     "severity": "critical",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+    },
+    {
+     "source": {
+      "name": "oracle-oval"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "photon"
+     },
+     "severity": "critical"
+    },
+    {
+     "source": {
+      "name": "redhat"
+     },
+     "score": 7,
+     "severity": "medium",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:H"
+    },
+    {
+     "source": {
+      "name": "rocky"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "ubuntu"
+     },
+     "severity": "medium"
+    }
+   ],
+   "recommendation": "Upgrade zlib to version 1.2.12-r2",
+   "affects": [
+    {
+     "ref": "pkg:apk/alpine/zlib@1.2.11-r3?arch=aarch64&distro=3.14.0",
+     "versions": [
+      {
+       "version": "1.2.11-r3",
+       "status": "affected"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "CVE-2022-4304",
+   "ratings": [
+    {
+     "source": {
+      "name": "alma"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "amazon"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "azure"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "cbl-mariner"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "ghsa"
+     },
+     "score": 5.9,
+     "severity": "medium",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N"
+    },
+    {
+     "source": {
+      "name": "julia"
+     },
+     "score": 5.9,
+     "severity": "medium",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N"
+    },
+    {
+     "source": {
+      "name": "nvd"
+     },
+     "score": 5.9,
+     "severity": "medium",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N"
+    },
+    {
+     "source": {
+      "name": "oracle-oval"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "photon"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "redhat"
+     },
+     "score": 5.9,
+     "severity": "medium",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:H/A:N"
+    },
+    {
+     "source": {
+      "name": "rocky"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "ubuntu"
+     },
+     "severity": "medium"
+    }
+   ],
+   "recommendation": "Upgrade libcrypto1.1 to version 1.1.1t-r0; Upgrade libssl1.1 to version 1.1.1t-r0",
+   "affects": [
+    {
+     "ref": "pkg:apk/alpine/libcrypto1.1@1.1.1k-r0?arch=aarch64&distro=3.14.0",
+     "versions": [
+      {
+       "version": "1.1.1k-r0",
+       "status": "affected"
+      }
+     ]
+    },
+    {
+     "ref": "pkg:apk/alpine/libssl1.1@1.1.1k-r0?arch=aarch64&distro=3.14.0",
+     "versions": [
+      {
+       "version": "1.1.1k-r0",
+       "status": "affected"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "CVE-2022-4450",
+   "ratings": [
+    {
+     "source": {
+      "name": "alma"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "amazon"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "azure"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "cbl-mariner"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "ghsa"
+     },
+     "score": 7.5,
+     "severity": "high",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+    },
+    {
+     "source": {
+      "name": "julia"
+     },
+     "score": 7.5,
+     "severity": "high",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+    },
+    {
+     "source": {
+      "name": "nvd"
+     },
+     "score": 7.5,
+     "severity": "high",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+    },
+    {
+     "source": {
+      "name": "oracle-oval"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "photon"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "redhat"
+     },
+     "score": 7.5,
+     "severity": "medium",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+    },
+    {
+     "source": {
+      "name": "rocky"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "ubuntu"
+     },
+     "severity": "medium"
+    }
+   ],
+   "recommendation": "Upgrade libcrypto1.1 to version 1.1.1t-r0; Upgrade libssl1.1 to version 1.1.1t-r0",
+   "affects": [
+    {
+     "ref": "pkg:apk/alpine/libcrypto1.1@1.1.1k-r0?arch=aarch64&distro=3.14.0",
+     "versions": [
+      {
+       "version": "1.1.1k-r0",
+       "status": "affected"
+      }
+     ]
+    },
+    {
+     "ref": "pkg:apk/alpine/libssl1.1@1.1.1k-r0?arch=aarch64&distro=3.14.0",
+     "versions": [
+      {
+       "version": "1.1.1k-r0",
+       "status": "affected"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "CVE-2023-0215",
+   "ratings": [
+    {
+     "source": {
+      "name": "alma"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "amazon"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "azure"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "cbl-mariner"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "ghsa"
+     },
+     "score": 7.5,
+     "severity": "high",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+    },
+    {
+     "source": {
+      "name": "julia"
+     },
+     "score": 7.5,
+     "severity": "high",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+    },
+    {
+     "source": {
+      "name": "nvd"
+     },
+     "score": 7.5,
+     "severity": "high",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+    },
+    {
+     "source": {
+      "name": "oracle-oval"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "photon"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "redhat"
+     },
+     "score": 7.5,
+     "severity": "medium",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+    },
+    {
+     "source": {
+      "name": "rocky"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "ubuntu"
+     },
+     "severity": "medium"
+    }
+   ],
+   "recommendation": "Upgrade libcrypto1.1 to version 1.1.1t-r0; Upgrade libssl1.1 to version 1.1.1t-r0",
+   "affects": [
+    {
+     "ref": "pkg:apk/alpine/libcrypto1.1@1.1.1k-r0?arch=aarch64&distro=3.14.0",
+     "versions": [
+      {
+       "version": "1.1.1k-r0",
+       "status": "affected"
+      }
+     ]
+    },
+    {
+     "ref": "pkg:apk/alpine/libssl1.1@1.1.1k-r0?arch=aarch64&distro=3.14.0",
+     "versions": [
+      {
+       "version": "1.1.1k-r0",
+       "status": "affected"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "CVE-2023-0286",
+   "ratings": [
+    {
+     "source": {
+      "name": "alma"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "amazon"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "azure"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "cbl-mariner"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "ghsa"
+     },
+     "score": 7.4,
+     "severity": "high",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:H"
+    },
+    {
+     "source": {
+      "name": "julia"
+     },
+     "score": 7.4,
+     "severity": "high",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:H"
+    },
+    {
+     "source": {
+      "name": "nvd"
+     },
+     "score": 7.4,
+     "severity": "high",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:H"
+    },
+    {
+     "source": {
+      "name": "oracle-oval"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "photon"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "redhat"
+     },
+     "score": 7.4,
+     "severity": "high",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:H"
+    },
+    {
+     "source": {
+      "name": "rocky"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "ubuntu"
+     },
+     "severity": "high"
+    }
+   ],
+   "recommendation": "Upgrade libcrypto1.1 to version 1.1.1t-r0; Upgrade libssl1.1 to version 1.1.1t-r0",
+   "affects": [
+    {
+     "ref": "pkg:apk/alpine/libcrypto1.1@1.1.1k-r0?arch=aarch64&distro=3.14.0",
+     "versions": [
+      {
+       "version": "1.1.1k-r0",
+       "status": "affected"
+      }
+     ]
+    },
+    {
+     "ref": "pkg:apk/alpine/libssl1.1@1.1.1k-r0?arch=aarch64&distro=3.14.0",
+     "versions": [
+      {
+       "version": "1.1.1k-r0",
+       "status": "affected"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "CVE-2023-0464",
+   "ratings": [
+    {
+     "source": {
+      "name": "alma"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "amazon"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "azure"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "cbl-mariner"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "julia"
+     },
+     "score": 7.5,
+     "severity": "high",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+    },
+    {
+     "source": {
+      "name": "nvd"
+     },
+     "score": 7.5,
+     "severity": "high",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+    },
+    {
+     "source": {
+      "name": "oracle-oval"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "photon"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "redhat"
+     },
+     "score": 5.9,
+     "severity": "low",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:H"
+    },
+    {
+     "source": {
+      "name": "ubuntu"
+     },
+     "severity": "low"
+    }
+   ],
+   "recommendation": "Upgrade libcrypto1.1 to version 1.1.1t-r1; Upgrade libssl1.1 to version 1.1.1t-r1",
+   "affects": [
+    {
+     "ref": "pkg:apk/alpine/libcrypto1.1@1.1.1k-r0?arch=aarch64&distro=3.14.0",
+     "versions": [
+      {
+       "version": "1.1.1k-r0",
+       "status": "affected"
+      }
+     ]
+    },
+    {
+     "ref": "pkg:apk/alpine/libssl1.1@1.1.1k-r0?arch=aarch64&distro=3.14.0",
+     "versions": [
+      {
+       "version": "1.1.1k-r0",
+       "status": "affected"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "CVE-2023-0465",
+   "ratings": [
+    {
+     "source": {
+      "name": "alma"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "amazon"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "azure"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "cbl-mariner"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "julia"
+     },
+     "score": 5.3,
+     "severity": "medium",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:N"
+    },
+    {
+     "source": {
+      "name": "nvd"
+     },
+     "score": 5.3,
+     "severity": "medium",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:N"
+    },
+    {
+     "source": {
+      "name": "oracle-oval"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "photon"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "redhat"
+     },
+     "score": 5.3,
+     "severity": "low",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:N"
+    },
+    {
+     "source": {
+      "name": "ubuntu"
+     },
+     "severity": "low"
+    }
+   ],
+   "recommendation": "Upgrade libcrypto1.1 to version 1.1.1t-r2; Upgrade libssl1.1 to version 1.1.1t-r2",
+   "affects": [
+    {
+     "ref": "pkg:apk/alpine/libcrypto1.1@1.1.1k-r0?arch=aarch64&distro=3.14.0",
+     "versions": [
+      {
+       "version": "1.1.1k-r0",
+       "status": "affected"
+      }
+     ]
+    },
+    {
+     "ref": "pkg:apk/alpine/libssl1.1@1.1.1k-r0?arch=aarch64&distro=3.14.0",
+     "versions": [
+      {
+       "version": "1.1.1k-r0",
+       "status": "affected"
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

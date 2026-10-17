@@ -1,0 +1,862 @@
+{
+ "bomFormat": "CycloneDX",
+ "specVersion": "1.7",
+ "vulnerabilities": [
+  {
+   "id": "CVE-2018-1000656",
+   "ratings": [
+    {
+     "source": {
+      "name": "ghsa"
+     },
+     "score": 7.5,
+     "severity": "high",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+    },
+    {
+     "source": {
+      "name": "ghsa"
+     },
+     "score": 8.7,
+     "severity": "high",
+     "method": "CVSSv4",
+     "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:H/SC:N/SI:N/SA:N"
+    },
+    {
+     "source": {
+      "name": "nvd"
+     },
+     "score": 5,
+     "severity": "medium",
+     "method": "CVSSv2",
+     "vector": "AV:N/AC:L/Au:N/C:N/I:N/A:P"
+    },
+    {
+     "source": {
+      "name": "nvd"
+     },
+     "score": 7.5,
+     "severity": "high",
+     "method": "CVSSv3",
+     "vector": "CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+    },
+    {
+     "source": {
+      "name": "redhat"
+     },
+     "score": 7.5,
+     "severity": "low",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+    },
+    {
+     "source": {
+      "name": "ubuntu"
+     },
+     "severity": "low"
+    }
+   ],
+   "recommendation": "Upgrade flask to version 0.12.3",
+   "affects": [
+    {
+     "ref": "pkg:pypi/flask@0.12",
+     "versions": [
+      {
+       "version": "0.12",
+       "status": "affected"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "CVE-2018-18074",
+   "ratings": [
+    {
+     "source": {
+      "name": "alma"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "amazon"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "ghsa"
+     },
+     "score": 7.5,
+     "severity": "high",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+    },
+    {
+     "source": {
+      "name": "nvd"
+     },
+     "score": 5,
+     "severity": "medium",
+     "method": "CVSSv2",
+     "vector": "AV:N/AC:L/Au:N/C:P/I:N/A:N"
+    },
+    {
+     "source": {
+      "name": "nvd"
+     },
+     "score": 7.5,
+     "severity": "high",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+    },
+    {
+     "source": {
+      "name": "oracle-oval"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "photon"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "redhat"
+     },
+     "score": 2.6,
+     "severity": "low",
+     "method": "CVSSv3",
+     "vector": "CVSS:3.0/AV:A/AC:H/PR:N/UI:R/S:U/C:L/I:N/A:N"
+    },
+    {
+     "source": {
+      "name": "rocky"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "ubuntu"
+     },
+     "severity": "medium"
+    }
+   ],
+   "recommendation": "Upgrade requests to version 2.20.0",
+   "affects": [
+    {
+     "ref": "pkg:pypi/requests@2.19.0",
+     "versions": [
+      {
+       "version": "2.19.0",
+       "status": "affected"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "CVE-2019-1010083",
+   "ratings": [
+    {
+     "source": {
+      "name": "ghsa"
+     },
+     "score": 7.5,
+     "severity": "high",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+    },
+    {
+     "source": {
+      "name": "ghsa"
+     },
+     "score": 8.7,
+     "severity": "high",
+     "method": "CVSSv4",
+     "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:H/SC:N/SI:N/SA:N"
+    },
+    {
+     "source": {
+      "name": "nvd"
+     },
+     "score": 5,
+     "severity": "medium",
+     "method": "CVSSv2",
+     "vector": "AV:N/AC:L/Au:N/C:N/I:N/A:P"
+    },
+    {
+     "source": {
+      "name": "nvd"
+     },
+     "score": 7.5,
+     "severity": "high",
+     "method": "CVSSv3",
+     "vector": "CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+    },
+    {
+     "source": {
+      "name": "redhat"
+     },
+     "score": 7.5,
+     "severity": "medium",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+    },
+    {
+     "source": {
+      "name": "ubuntu"
+     },
+     "severity": "low"
+    }
+   ],
+   "recommendation": "Upgrade flask to version 1.0",
+   "affects": [
+    {
+     "ref": "pkg:pypi/flask@0.12",
+     "versions": [
+      {
+       "version": "0.12",
+       "status": "affected"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "CVE-2020-14343",
+   "ratings": [
+    {
+     "source": {
+      "name": "alma"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "cbl-mariner"
+     },
+     "severity": "critical"
+    },
+    {
+     "source": {
+      "name": "ghsa"
+     },
+     "score": 9.8,
+     "severity": "critical",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+    },
+    {
+     "source": {
+      "name": "ghsa"
+     },
+     "score": 9.3,
+     "severity": "critical",
+     "method": "CVSSv4",
+     "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N"
+    },
+    {
+     "source": {
+      "name": "nvd"
+     },
+     "score": 10,
+     "severity": "high",
+     "method": "CVSSv2",
+     "vector": "AV:N/AC:L/Au:N/C:C/I:C/A:C"
+    },
+    {
+     "source": {
+      "name": "nvd"
+     },
+     "score": 9.8,
+     "severity": "critical",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+    },
+    {
+     "source": {
+      "name": "oracle-oval"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "photon"
+     },
+     "severity": "critical"
+    },
+    {
+     "source": {
+      "name": "redhat"
+     },
+     "score": 9.8,
+     "severity": "medium",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+    },
+    {
+     "source": {
+      "name": "rocky"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "ubuntu"
+     },
+     "severity": "medium"
+    }
+   ],
+   "recommendation": "Upgrade pyyaml to version 5.4",
+   "affects": [
+    {
+     "ref": "pkg:pypi/pyyaml@5.3",
+     "versions": [
+      {
+       "version": "5.3",
+       "status": "affected"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "CVE-2020-1747",
+   "ratings": [
+    {
+     "source": {
+      "name": "alma"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "cbl-mariner"
+     },
+     "severity": "critical"
+    },
+    {
+     "source": {
+      "name": "ghsa"
+     },
+     "score": 9.8,
+     "severity": "critical",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+    },
+    {
+     "source": {
+      "name": "ghsa"
+     },
+     "score": 9.3,
+     "severity": "critical",
+     "method": "CVSSv4",
+     "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N"
+    },
+    {
+     "source": {
+      "name": "nvd"
+     },
+     "score": 10,
+     "severity": "high",
+     "method": "CVSSv2",
+     "vector": "AV:N/AC:L/Au:N/C:C/I:C/A:C"
+    },
+    {
+     "source": {
+      "name": "nvd"
+     },
+     "score": 9.8,
+     "severity": "critical",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+    },
+    {
+     "source": {
+      "name": "oracle-oval"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "photon"
+     },
+     "severity": "critical"
+    },
+    {
+     "source": {
+      "name": "redhat"
+     },
+     "score": 9.8,
+     "severity": "medium",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+    },
+    {
+     "source": {
+      "name": "rocky"
+     },
+     "severity": "medium"
+    }
+   ],
+   "recommendation": "Upgrade pyyaml to version 5.3.1",
+   "affects": [
+    {
+     "ref": "pkg:pypi/pyyaml@5.3",
+     "versions": [
+      {
+       "version": "5.3",
+       "status": "affected"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "CVE-2023-30861",
+   "ratings": [
+    {
+     "source": {
+      "name": "amazon"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "ghsa"
+     },
+     "score": 7.5,
+     "severity": "high",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+    },
+    {
+     "source": {
+      "name": "ghsa"
+     },
+     "score": 8.7,
+     "severity": "high",
+     "method": "CVSSv4",
+     "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:N/VA:N/SC:N/SI:N/SA:N"
+    },
+    {
+     "source": {
+      "name": "nvd"
+     },
+     "score": 7.5,
+     "severity": "high",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+    },
+    {
+     "source": {
+      "name": "oracle-oval"
+     },
+     "severity": "high"
+    },
+    {
+     "source": {
+      "name": "redhat"
+     },
+     "score": 7.5,
+     "severity": "high",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+    },
+    {
+     "source": {
+      "name": "ubuntu"
+     },
+     "severity": "medium"
+    }
+   ],
+   "recommendation": "Upgrade flask to version 2.3.2, 2.2.5",
+   "affects": [
+    {
+     "ref": "pkg:pypi/flask@0.12",
+     "versions": [
+      {
+       "version": "0.12",
+       "status": "affected"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "CVE-2023-32681",
+   "ratings": [
+    {
+     "source": {
+      "name": "alma"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "amazon"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "cbl-mariner"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "ghsa"
+     },
+     "score": 6.1,
+     "severity": "medium",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:C/C:H/I:N/A:N"
+    },
+    {
+     "source": {
+      "name": "nvd"
+     },
+     "score": 6.1,
+     "severity": "medium",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:C/C:H/I:N/A:N"
+    },
+    {
+     "source": {
+      "name": "oracle-oval"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "photon"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "redhat"
+     },
+     "score": 6.1,
+     "severity": "medium",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:C/C:H/I:N/A:N"
+    },
+    {
+     "source": {
+      "name": "rocky"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "ubuntu"
+     },
+     "severity": "medium"
+    }
+   ],
+   "recommendation": "Upgrade requests to version 2.31.0",
+   "affects": [
+    {
+     "ref": "pkg:pypi/requests@2.19.0",
+     "versions": [
+      {
+       "version": "2.19.0",
+       "status": "affected"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "CVE-2024-35195",
+   "ratings": [
+    {
+     "source": {
+      "name": "alma"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "amazon"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "azure"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "cbl-mariner"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "ghsa"
+     },
+     "score": 5.6,
+     "severity": "medium",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:L/AC:H/PR:H/UI:R/S:U/C:H/I:H/A:N"
+    },
+    {
+     "source": {
+      "name": "oracle-oval"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "photon"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "redhat"
+     },
+     "score": 5.6,
+     "severity": "medium",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:L/AC:H/PR:H/UI:R/S:U/C:H/I:H/A:N"
+    },
+    {
+     "source": {
+      "name": "rocky"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "ubuntu"
+     },
+     "severity": "medium"
+    }
+   ],
+   "recommendation": "Upgrade requests to version 2.32.0",
+   "affects": [
+    {
+     "ref": "pkg:pypi/requests@2.19.0",
+     "versions": [
+      {
+       "version": "2.19.0",
+       "status": "affected"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "CVE-2024-47081",
+   "ratings": [
+    {
+     "source": {
+      "name": "alma"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "amazon"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "azure"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "cbl-mariner"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "ghsa"
+     },
+     "score": 5.3,
+     "severity": "medium",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:U/C:H/I:N/A:N"
+    },
+    {
+     "source": {
+      "name": "oracle-oval"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "photon"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "redhat"
+     },
+     "score": 5.3,
+     "severity": "medium",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:U/C:H/I:N/A:N"
+    },
+    {
+     "source": {
+      "name": "rocky"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "ubuntu"
+     },
+     "severity": "medium"
+    }
+   ],
+   "recommendation": "Upgrade requests to version 2.32.4",
+   "affects": [
+    {
+     "ref": "pkg:pypi/requests@2.19.0",
+     "versions": [
+      {
+       "version": "2.19.0",
+       "status": "affected"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "CVE-2026-25645",
+   "ratings": [
+    {
+     "source": {
+      "name": "azure"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "ghsa"
+     },
+     "score": 4.4,
+     "severity": "medium",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:L/AC:H/PR:L/UI:R/S:U/C:N/I:H/A:N"
+    },
+    {
+     "source": {
+      "name": "nvd"
+     },
+     "score": 5.5,
+     "severity": "medium",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:N/I:H/A:N"
+    },
+    {
+     "source": {
+      "name": "photon"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "redhat"
+     },
+     "score": 4.7,
+     "severity": "medium",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:N/I:H/A:N"
+    },
+    {
+     "source": {
+      "name": "ubuntu"
+     },
+     "severity": "low"
+    }
+   ],
+   "recommendation": "Upgrade requests to version 2.33.0",
+   "affects": [
+    {
+     "ref": "pkg:pypi/requests@2.19.0",
+     "versions": [
+      {
+       "version": "2.19.0",
+       "status": "affected"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "CVE-2026-27205",
+   "ratings": [
+    {
+     "source": {
+      "name": "amazon"
+     },
+     "severity": "medium"
+    },
+    {
+     "source": {
+      "name": "ghsa"
+     },
+     "score": 2.3,
+     "severity": "low",
+     "method": "CVSSv4",
+     "vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:P/VC:L/VI:N/VA:N/SC:N/SI:N/SA:N"
+    },
+    {
+     "source": {
+      "name": "nvd"
+     },
+     "score": 4.3,
+     "severity": "medium",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:L/I:N/A:N"
+    },
+    {
+     "source": {
+      "name": "redhat"
+     },
+     "score": 4.3,
+     "severity": "medium",
+     "method": "CVSSv31",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:L/I:N/A:N"
+    },
+    {
+     "source": {
+      "name": "ubuntu"
+     },
+     "severity": "low"
+    }
+   ],
+   "recommendation": "Upgrade flask to version 3.1.3",
+   "affects": [
+    {
+     "ref": "pkg:pypi/flask@0.12",
+     "versions": [
+      {
+       "version": "0.12",
+       "status": "affected"
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}
