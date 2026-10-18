@@ -208,6 +208,11 @@ class TestScan(EnvironmentTestCase):
             ("tdxguard.commands.gitinfo.remote_url", "git@github.com:tda-corp/tdx-scribe.git"),
             ("tdxguard.commands.docker.ensure_available", None),
             ("tdxguard.commands.docker.detect_socket", None),
+            # These tests drive the Docker engine. Without the two below, a machine with no
+            # Docker (the macOS and Windows release runners) fell back to the native engine
+            # and downloaded the real tools.
+            ("tdxguard.commands.docker.is_available", True),
+            ("tdxguard.commands.docker.image_usable", True),
         ):
             patcher = patch(target, return_value=value) if value is not None else patch(target)
             mock = patcher.start()
