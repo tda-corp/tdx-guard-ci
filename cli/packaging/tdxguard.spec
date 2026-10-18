@@ -6,6 +6,8 @@
 #   byte for byte as in the package.
 # - `X utf8`: the interpreter starts in UTF-8 mode, as `python3 -X utf8` does for the
 #   helpers when they run from the package; frozen.run_helper refuses to run without it.
+# - The report generator (tdxguard/assessment/compliance_report.py) is an ordinary module that
+#   `tdxguard report` imports; it is listed below as well so that it can never be left out.
 
 from pathlib import Path
 
@@ -21,7 +23,11 @@ a = Analysis(  # noqa: F821
     ],
     # The helpers run from the data files above, which PyInstaller does not analyse; importing
     # them as modules pulls in the standard library modules they need (html, fnmatch, ...).
-    hiddenimports=["tdxguard.engine.helpers.sarif_enrich", "tdxguard.engine.helpers.opengrep_prune_rules"],
+    hiddenimports=[
+        "tdxguard.engine.helpers.sarif_enrich",
+        "tdxguard.engine.helpers.opengrep_prune_rules",
+        "tdxguard.assessment.compliance_report",
+    ],
     # Nothing the tool uses; keeps the executable small.
     excludes=["tkinter", "_tkinter", "pydoc_data", "lib2to3", "idlelib", "ensurepip"],
     noarchive=False,

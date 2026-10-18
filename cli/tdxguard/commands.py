@@ -1,4 +1,4 @@
-"""The commands: login, logout, whoami, init, scan."""
+"""The commands: login, logout, whoami, init, doctor, scan, report, tools."""
 
 from __future__ import annotations
 
@@ -23,6 +23,7 @@ from tdxguard import (
     DEFAULT_SCANNER_IMAGE,
     DEFAULT_SERVER,
     __version__,
+    assessment,
     config,
     coverage,
     credentials,
@@ -32,6 +33,7 @@ from tdxguard import (
     reports,
     server,
 )
+from tdxguard.assessment import browser as report_browser
 from tdxguard.engine import scan, tools
 from tdxguard.errors import (
     EXIT_ERROR,
@@ -976,6 +978,102 @@ def _results_url(server_url: str, product: Dict[str, Any], branch_id: Optional[i
     return f"{url}?{query}"
 
 
+# --- report ---
+
+
+def cmd_report(args: argparse.Namespace, ui: UI) -> int:
+    """The security assessment report: fetch, render HTML, print to PDF with a local browser."""
+    creds: Optional[credentials.Credentials] = None
+    if args.from_data:
+        data = assessment.load_data(args.from_data)
+        product = str(data["product"].get("name") or args.product or "product")
+        creds = credentials.load()
+    else:
+        product = args.product or _report_project()
+        # Before the fetch, so that a missing login fails at once.
+        creds = credentials.require()
+
+    branch = getattr(args, "branch", None) or ""
+    options = assessment.Options(
+        product=product,
+        branch=branch,
+        all_branches=args.all_branches,
+        lang=args.lang,
+        period_days=args.period_days,
+        prepared_for=args.prepared_for or "",
+        prepared_by=args.prepared_by or "",
+        classification=args.classification,
+        ui_url=creds.server if creds else "",
+    )
+    base = assessment.output_base(args.out, product, args.lang)
+    if base.parent and not base.parent.is_dir():
+        raise ConfigError(f"The directory {base.parent} does not exist.", "Create it, or choose another --out.")
+    # Looked up before the fetch: a wrong TDXGUARD_BROWSER should not cost a minute of waiting.
+    found = None if args.no_pdf else report_browser.find_browser()
+
+    if creds is not None and not args.from_data:
+        scope = "all branches" if args.all_branches else (f"branch {branch}" if branch else "the default branch")
+        ui.step(f"Fetching the findings of {product} ({scope}) from {creds.server}")
+        ui.info("This takes 10 to 60 seconds on a large product.")
+        watch = assessment.Stopwatch()
+        data = assessment.fetch(creds, options, lambda stage: ui.info(f"{watch.seconds():5.1f} s  {stage}"))
+        fetched = data.get("branch") or {}
+        ui.success(
+            f"Fetched {len(data.get('active') or [])} open and {len(data.get('decided') or [])} decided "
+            f"observations"
+            + (f" of branch {fetched.get('name')}" if fetched.get("name") else "")
+            + f" in {data.get('requests', '?')} requests ({watch.text()})."
+        )
+        if args.save_data:
+            try:
+                Path(args.save_data).write_text(json.dumps(data), encoding="utf-8")
+            except OSError as e:
+                raise CLIError(f"Cannot write {args.save_data}: {e.strerror or e}") from e
+            ui.info(f"Data saved to {args.save_data} (render it again with --from-data).")
+    for warning in assessment.warnings_of(data):
+        ui.warn(warning)
+
+    ui.step(f"Writing the report ({args.lang})")
+    written = assessment.render(data, options, base, markdown=args.markdown, csv=args.csv)
+    ui.info(f"{written.observations} open observations, {written.findings} findings, verdict: {written.verdict}")
+    for path in (written.html, written.markdown, written.csv):
+        if path is not None:
+            ui.success(f"Wrote {path}")
+
+    opened = written.html
+    if not args.no_pdf:
+        pdf = base.with_name(base.name + ".pdf")
+        if found is None:
+            ui.warn("No Chrome, Chromium or Edge found, so no PDF was written.")
+            again = "." if args.open else ", or run again with --open."
+            ui.info(f"Open {written.html} and print it to PDF (A4, without headers and footers){again}")
+            ui.info(f"Or set {report_browser.ENV_BROWSER} to the browser's path.")
+        else:
+            ui.step(f"Printing to PDF with {found.name}")
+            ui.debug(f"browser: {found.path}")
+            watch = assessment.Stopwatch()
+            report_browser.print_to_pdf(found, written.html, pdf)
+            pages = report_browser.page_count(pdf)
+            details = [f"{pages} pages"] if pages else []
+            ui.success(f"Wrote {pdf} ({', '.join(details + [watch.text()])})")
+            opened = pdf
+
+    if args.open and not _open_browser(opened.resolve().as_uri()):
+        ui.warn(f"Could not open a browser; the report is {opened}.")
+    return EXIT_OK
+
+
+def _report_project() -> str:
+    root = gitinfo.find_root() or Path.cwd()
+    project = _doctor_project(root, coverage.find_workflow(root))
+    if not project:
+        raise ConfigError(
+            f"Which product? There is no {config.CONFIG_FILE} here.",
+            "Pass --product NAME, or run the command inside a repository that has one (`tdxguard init`).",
+        )
+    return project
+
+
 # --- tools ---
 
 
@@ -1037,5 +1135,6 @@ COMMANDS = {
     "doctor": cmd_doctor,
     "coverage": cmd_doctor,
     "scan": cmd_scan,
+    "report": cmd_report,
     "tools": cmd_tools,
 }

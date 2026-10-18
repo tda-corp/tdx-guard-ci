@@ -12,6 +12,8 @@ workflow runs it on every platform after the build, and it runs the same way loc
    at run time so that no secret is ever committed), and
    `tdxguard scan --engine native --no-upload --keep <dir>` runs on it.
 4. Every report exists, summary.json has no errors, and every scanner found something.
+5. `report --help` works, and `report --from-data` renders the security assessment report of
+   a small saved product (HTML only, no network, no browser): the generator is in the bundle.
 
 The executable must not need Python: `python`, `python3` and `py` on its PATH are traps
 that record any call, and the test fails if one was made.
@@ -77,6 +79,27 @@ RUN apt-get update && apt-get install -y curl
 EXPOSE 22
 CMD ["/opt/app/run"]
 """
+
+
+# The smallest data `report --from-data` renders: a product without findings.
+REPORT_DATA = {
+    "format_version": "2.0",
+    "fetched": "2026-10-18T00:00:00+00:00",
+    "product": {"id": 1, "name": "tdxguard-smoke", "repository_default_branch": 1},
+    "branch": {"id": 1, "name": "main"},
+    "warnings": [],
+    "active": [],
+    "decided": [],
+    "resolved_count": 0,
+    "checks": [],
+    "logs": [],
+    "logs_mode": "empty",
+    "period": {"days": 30, "age": "Past 30 days", "resolved": 0},
+    "settings": None,
+    "product_group": None,
+    "metrics": None,
+    "rules": {},
+}
 
 
 def fail(message: str) -> None:
@@ -204,6 +227,22 @@ def main() -> int:
         if row is None or row["findings"] <= 0:
             fail(f"no findings from {scanner} in {report}: {row}")
         print(f"ok {row['label']}: {row['findings']} finding(s), {row['severe']} severe")
+
+    step("report")
+    code, output = run([executable, "report", "--help"], env)
+    if code != 0 or "--from-data" not in output:
+        fail("report --help failed")
+    data = work / "report-data.json"
+    data.write_text(json.dumps(REPORT_DATA), encoding="utf-8")
+    code, _ = run([executable, "report", "--from-data", data, "--lang", "en", "--no-pdf", "--out", work / "r"], env)
+    html = work / "r.html"
+    if code != 0 or not html.is_file():
+        fail(f"report --from-data exited with {code}")
+    text = html.read_text(encoding="utf-8")
+    for expected in ("Security assessment report", "tdxguard-smoke", "OWASP Top 10"):
+        if expected not in text:
+            fail(f"the report has no {expected!r}")
+    print(f"ok r.html ({html.stat().st_size} bytes)")
 
     step("no Python")
     if record.exists():
