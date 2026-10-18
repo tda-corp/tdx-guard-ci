@@ -46,6 +46,26 @@ def is_available() -> bool:
         return False
 
 
+def image_usable(image: str, timeout: int = 600) -> bool:
+    """
+    Whether the scanner image is on this machine or can be pulled. The `auto` engine uses
+    Docker only then: a registry that refuses the pull (a private package, no `docker login`)
+    used to end the scan with an error although the native engine would have worked.
+    """
+    try:
+        present = subprocess.run(  # nosec B603 B607
+            ["docker", "image", "inspect", image], capture_output=True, text=True, timeout=30
+        )
+        if present.returncode == 0:
+            return True
+        pulled = subprocess.run(  # nosec B603 B607
+            ["docker", "pull", "-q", image], capture_output=True, text=True, timeout=timeout
+        )
+        return pulled.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
 @dataclass
 class Socket:
     """The Docker socket as the daemon sees it (the -v source) and the group to add."""

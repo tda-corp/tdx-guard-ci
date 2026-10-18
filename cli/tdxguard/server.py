@@ -86,6 +86,21 @@ class Client:
                 return product
         return None
 
+    def find_branch(self, product_id: Any, name: str) -> Optional[Dict[str, Any]]:
+        """A branch of the product, exact match by name; the API's name filter is a substring match."""
+        query = urllib.parse.urlencode({"product": int(product_id), "name": name, "page_size": 1000})
+        response = http.get(self._url(f"branches/?{query}"), self.auth_header)
+        data = self._check(response, "Looking up the branch")
+        results = data.get("results", data) if isinstance(data, dict) else data
+        for branch in results or []:
+            if isinstance(branch, dict) and branch.get("name") == name:
+                return branch
+        return None
+
+    def product(self, product_id: Any) -> Dict[str, Any]:
+        response = http.get(self._url(f"products/{int(product_id)}/"), self.auth_header)
+        return self._check(response, "Reading the product")
+
     def onboard(self, name: str, repository: str) -> Dict[str, Any]:
         response = http.post_json(self._url("onboarding/"), {"name": name, "repository": repository}, self.auth_header)
         if response.status == 403:

@@ -10,7 +10,7 @@ from unittest.mock import patch
 from tdxguard import __main__ as entry
 from tdxguard import commands, credentials, http, oidc, server
 from tdxguard.engine import scan, tools
-from tdxguard.errors import EXIT_ERROR, EXIT_GATE, EXIT_OK, AuthenticationError
+from tdxguard.errors import EXIT_ERROR, EXIT_GATE, EXIT_OK, ApiError, AuthenticationError
 
 
 def run_main(argv):
@@ -90,6 +90,20 @@ class TestClient(unittest.TestCase):
         self.assertEqual(2, server.Client("https://g/api", token="t").find_product("tdx-scribe")["id"])
         self.assertIsNone(server.Client("https://g/api", token="t").find_product("tdx"))
         self.assertIn("products/?name=tdx&page_size=1000", get_mock.call_args[0][0])
+
+    @patch("tdxguard.server.http.get")
+    def test_find_branch_exact_match(self, get_mock):
+        get_mock.return_value = http.Response(
+            200,
+            json.dumps(
+                {"results": [{"id": 4, "name": "local/jane/master-old"}, {"id": 5, "name": "local/jane/master"}]}
+            ).encode(),
+            {},
+        )
+        client = server.Client("https://g/api", token="t")
+        self.assertEqual(5, client.find_branch(7, "local/jane/master")["id"])
+        self.assertIsNone(client.find_branch(7, "local/jane"))
+        self.assertIn("branches/?product=7&name=local%2Fjane&page_size=1000", get_mock.call_args[0][0])
 
 
 class EnvironmentTestCase(unittest.TestCase):
@@ -194,6 +208,11 @@ class TestScan(EnvironmentTestCase):
             ("tdxguard.commands.gitinfo.remote_url", "git@github.com:tda-corp/tdx-scribe.git"),
             ("tdxguard.commands.docker.ensure_available", None),
             ("tdxguard.commands.docker.detect_socket", None),
+            # These tests drive the Docker engine. Without the two below, a machine with no
+            # Docker (the macOS and Windows release runners) fell back to the native engine
+            # and downloaded the real tools.
+            ("tdxguard.commands.docker.is_available", True),
+            ("tdxguard.commands.docker.image_usable", True),
         ):
             patcher = patch(target, return_value=value) if value is not None else patch(target)
             mock = patcher.start()
@@ -283,11 +302,13 @@ class TestScan(EnvironmentTestCase):
         ]
         client.onboard.return_value = {"product": 7, "status": "Done"}
         client.upload.return_value = {"observations_new": 1, "observations_resolved": 0}
+        client.find_branch.return_value = {"id": 31, "name": "local/jane/feature/login"}
 
         code, out, err = run_main(["scan", "--no-images", "--json"])
 
         self.assertEqual(EXIT_GATE, code, err)
         client_cls.assert_called_with("https://guard.example.com/api", token="t")
+        client.find_branch.assert_called_with(7, "local/jane/feature/login")
         client.onboard.assert_called_with("tdx-scribe", "tda-corp/tdx-scribe")
         self.assertEqual(1, len(self.commands_run))
         uploads = [(Path(c[0][0]).name, c[0][1]) for c in client.upload.call_args_list]
@@ -318,11 +339,39 @@ class TestScan(EnvironmentTestCase):
             uploads,
         )
         document = json.loads(out)
-        self.assertEqual("https://guard.example.com/#/products/7/show", document["upload"]["url"])
+        # The observations of the branch, with the filter in the URL the way the frontend keeps it
+        url = (
+            "https://guard.example.com/products/7/show?displayedFilters=%7B%7D"
+            "&filter=%7B%22current_status%22%3A%5B%22Open%22%2C%22Affected%22%2C%22In+review%22%5D"
+            "%2C%22branch%22%3A31%7D&order=ASC&sort=current_priority"
+        )
+        self.assertEqual(url, document["upload"]["url"])
+        self.assertIn(f"Results: {url}", err)
+        self.assertIn(
+            "(branch local/jane/feature/login — local scans are kept apart from the main branch numbers)", err
+        )
         self.assertEqual({"critical": 1, "high": 1}, document["counts"])
         self.assertIn("Created the project tdx-scribe", err)
         self.assertFalse(document["upload"]["security_gate_passed"])
         self.assertIn("TDxGuard security gate: failed (this reflects the default branch", err)
+
+    @patch("tdxguard.commands.server.Client")
+    def test_results_link_without_the_branch(self, client_cls):
+        os.environ["TDXGUARD_TOKEN"] = "t"
+        os.environ["TDXGUARD_SERVER"] = "https://guard.example.com"
+        client = client_cls.return_value
+        client.me.return_value = {"username": "jane"}
+        client.find_product.return_value = {"id": 7, "name": "tdx-scribe", "security_gate_passed": True}
+        client.upload.return_value = {"observations_new": 0, "observations_resolved": 0}
+        client.find_branch.side_effect = ApiError("Looking up the branch failed (HTTP 500)")
+
+        code, out, err = run_main(["scan", "--no-images", "--json", "--branch", "release/1.2"])
+
+        self.assertEqual(EXIT_GATE, code, err)
+        # The lookup failed: the link opens the product, and the upload is not an error for it
+        self.assertEqual("https://guard.example.com/products/7/show", json.loads(out)["upload"]["url"])
+        self.assertIn("(branch release/1.2)", err)
+        self.assertNotIn("kept apart", err)
 
     @patch("tdxguard.commands.server.Client")
     def test_expired_token_stops_before_scanning(self, client_cls):
@@ -384,9 +433,11 @@ class TestInitCommand(EnvironmentTestCase):
             self.assertIn("repository: tda-corp/TDX_Scribe", text)
             self.assertIn("dockerfile: web/Dockerfile", text)
 
-            code, _, err = run_main(["init"])
-            self.assertEqual(EXIT_ERROR, code)
-            self.assertIn("--force", err)
+            # An existing file is kept, not an error: init goes on to the CI workflow.
+            code, out, _ = run_main(["init", "--project", "other"])
+            self.assertEqual(EXIT_OK, code)
+            self.assertIn("--force", out)
+            self.assertIn("project: tdx-scribe", (repo / ".tdxguard.yml").read_text())
 
             code, _, _ = run_main(["init", "--force", "--project", "other"])
             self.assertEqual(EXIT_OK, code)

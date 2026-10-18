@@ -20,6 +20,16 @@ of the same name. Measured across the eleven onboarded repositories:
                                          None of the eleven repositories uses jQuery.
   python/flask directly-returned-format-string
                                          any helper that returns an f-string.
+  php/symfony symfony-non-literal-redirect
+                                         `$this->redirect(...)`: 157 controller redirects
+                                         in HumHub, a Yii application that is not Symfony.
+
+One more is confined the same way although it matches markup rather than a name:
+
+  python/django django-no-csrf-token     every POST <form> without `{% csrf_token %}`,
+                                         in any template language: Thymeleaf in Spring
+                                         PetClinic (3) and WebGoat (107), where Spring
+                                         Security adds the token and Django is absent.
 
 For those rules this script finds the directories whose dependency manifest declares the
 framework and restricts the rule to them with `paths.include`. A repository holds a
@@ -28,10 +38,15 @@ subproject, not the repository: Django in apps/api/requirements/base.txt confine
 Django rule to apps/api/. Where no directory declares the framework the rule is removed.
 
 Manifests are those a project declares directly (pyproject.toml, requirements*.txt and
-requirements/*.txt, setup.py, setup.cfg, Pipfile, package.json, go.mod). Lockfiles are
-not read: they list transitive dependencies. jQuery is also detected where it is loaded
-the old way, as a jquery*.js file or a <script> that names it, and is then scoped to the
-nearest directory above that file with a manifest.
+requirements/*.txt, setup.py, setup.cfg, Pipfile, package.json, go.mod, composer.json).
+Lockfiles are not read: they list transitive dependencies. Symfony counts as declared
+through symfony/framework-bundle, the package that provides `$this->redirect()`; Laravel
+and Yii applications pull in other symfony/* components without being Symfony. jQuery is
+also detected where it is loaded the old way, as a jquery*.js file or a <script> that
+names it, and is then scoped to the nearest directory above that file with a manifest.
+
+WordPress plugin rules need nothing here: each carries `paths.include:
+wp-content/plugins/**` itself.
 
 Directories given after the repository are not searched: the full rule tree is unpacked
 inside the checkout and carries a Pipfile of its own.
@@ -51,11 +66,20 @@ from pathlib import Path
 # Rules that match a bare method name, per framework: rule files relative to the rules
 # directory, or a directory whose every rule file qualifies.
 NAME_ONLY_RULES = {
-    "django": ["python/django/security/audit/query-set-extra.yaml"],
+    "django": [
+        "python/django/security/audit/query-set-extra.yaml",
+        "python/django/security/django-no-csrf-token.yaml",
+    ],
     "flask": ["python/flask/security/audit/directly-returned-format-string.yaml"],
     "jquery": ["javascript/jquery/security"],
+    "symfony": ["php/symfony/security/audit/symfony-non-literal-redirect.yaml"],
 }
-PACKAGES = {"django": ["django"], "flask": ["flask"], "jquery": ["jquery"]}
+PACKAGES = {
+    "django": ["django"],
+    "flask": ["flask"],
+    "jquery": ["jquery"],
+    "symfony": ["symfony/framework-bundle"],
+}
 
 MANIFEST_PATTERNS = [
     "pyproject.toml",
@@ -66,6 +90,7 @@ MANIFEST_PATTERNS = [
     "Pipfile",
     "package.json",
     "go.mod",
+    "composer.json",
 ]
 SKIP_DIRECTORIES = {"node_modules", ".venv", "venv", "vendor", ".git", "dist", "build"}
 RULE_ID = re.compile(r"^(\s*)- id:", re.MULTILINE)

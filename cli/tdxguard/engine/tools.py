@@ -48,8 +48,31 @@ DOWNLOAD_TIMEOUT = 120
 CHUNK = 1024 * 1024
 
 # Rule directories kept from opengrep-rules: the security/ directories below these roots,
-# as the template's "Fetch Opengrep and its rules" step selects them.
-RULE_LANGUAGES = ("python", "javascript", "typescript", "go", "generic")
+# as the template's "Fetch Opengrep and its rules" step selects them. This is the one list:
+# both CI templates (OPENGREP_RULE_LANGUAGES), ci-templates/local/tdxguard-scan.sh, the
+# scanner image (built with this module), `tdxguard doctor` and the report's methodology
+# section follow it, and tests fail when one of them differs.
+#
+# Application languages only. Left out on purpose:
+#   terraform, yaml, dockerfile, json  infrastructure as code, which Trivy covers.
+#   solidity, apex, ocaml, clojure     no TDA product is written in them; solidity's rules
+#                                      are DeFi exploit patterns.
+#   bash, html                         curl-pipe-to-shell and missing-integrity checks that
+#                                      report deliberate install scripts and CDN links.
+RULE_LANGUAGES = (
+    "python",
+    "javascript",
+    "typescript",
+    "go",
+    "generic",
+    "php",
+    "java",
+    "kotlin",
+    "scala",
+    "ruby",
+    "csharp",
+    "c",
+)
 MIN_RULES = 100
 
 # Supported platforms. Opengrep ships separate Linux builds for glibc (manylinux) and musl.
@@ -290,6 +313,10 @@ def installed(tool: Tool, platform: str, root: Path) -> Optional[Path]:
         return None
     if not isinstance(marker, dict) or marker.get("sha256") != tool.asset_for(platform).sha256:
         return None
+    # The rules are a selection from the archive: an install made for another language
+    # list is stale although the archive is the same.
+    if tool.name == "opengrep-rules" and marker.get("languages") != list(RULE_LANGUAGES):
+        return None
     if tool.binary and not (directory / tool.executable_name(platform)).is_file():
         return None
     return directory
@@ -425,13 +452,12 @@ def install(
             _make_executable(executable, platform)
             if tool.name == "opengrep" and run_check:
                 check_opengrep(executable)
+        marker: Dict[str, object] = {"tool": tool.name, "version": tool.version, "platform": platform,
+                                     "asset": asset.name, "sha256": asset.sha256, "url": url}  # fmt: skip
+        if tool.name == "opengrep-rules":
+            marker["languages"] = list(RULE_LANGUAGES)
         with open(staging / MARKER, "w", encoding="utf-8") as f:
-            json.dump(
-                {"tool": tool.name, "version": tool.version, "platform": platform, "asset": asset.name,
-                 "sha256": asset.sha256, "url": url},
-                f,
-                indent=2,
-            )  # fmt: skip
+            json.dump(marker, f, indent=2)
         _move_into_place(staging, target, tool, platform, root)
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
@@ -495,8 +521,9 @@ def extract_rules(archive: Path, dest: Path) -> int:
     The security/ directories of opengrep-rules below RULE_LANGUAGES, with the archive's
     top directory stripped: what the Dockerfile's `find <roots> -type d -name security`
     plus `cp -R` used to produce. Only regular files are taken, every path is checked to
-    stay inside dest. Returns the number of .yaml rules; fewer than MIN_RULES means the
-    ruleset's layout changed, which must not pass as a scan without rules.
+    stay inside dest. Returns the number of .yaml rules; fewer than MIN_RULES, or a
+    language with none, means the ruleset's layout changed, which must not pass as a scan
+    without rules.
     """
     root = dest.resolve()
     with tarfile.open(archive, "r:gz") as tf:
@@ -517,6 +544,10 @@ def extract_rules(archive: Path, dest: Path) -> int:
     count = sum(1 for _ in root.rglob("*.yaml"))
     if count < MIN_RULES:
         raise ToolError(f"Only {count} security rules found in the opengrep-rules archive; its layout changed.")
+    # A language that lost its directory upstream would otherwise pass unnoticed in the total.
+    empty = [language for language in RULE_LANGUAGES if not any((root / language).rglob("*.yaml"))]
+    if empty:
+        raise ToolError(f"No security rules for {', '.join(empty)} in the opengrep-rules archive; its layout changed.")
     if os.name == "posix":
         # Readable by any user: the scanner image runs under an arbitrary --user.
         for directory, _, files in os.walk(root):

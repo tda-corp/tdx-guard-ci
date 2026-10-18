@@ -9,6 +9,7 @@ import re
 import shutil
 import socket as socket_module
 import sys
+import urllib.parse
 import webbrowser
 from collections import deque
 from datetime import date
@@ -23,6 +24,7 @@ from tdxguard import (
     DEFAULT_SERVER,
     __version__,
     config,
+    coverage,
     credentials,
     docker,
     gitinfo,
@@ -201,24 +203,30 @@ def _expiry_note(expires: str) -> str:
 def cmd_init(args: argparse.Namespace, ui: UI) -> int:
     root = gitinfo.find_root() or Path.cwd()
     path = root / config.CONFIG_FILE
-    if path.exists() and not args.force:
-        raise ConfigError(f"{path} already exists.", "Use --force to overwrite it.")
 
     remote = gitinfo.remote_url(root)
     repository, repository_name = gitinfo.parse_remote(remote) if remote else ("", "")
     project = args.project or config.product_name_from_repository(repository_name or root.name)
     dockerfiles = config.find_dockerfiles(root)
 
-    path.write_text(config.render(project, repository or None, dockerfiles), encoding="utf-8")
+    # Validate the flags before anything is written.
+    options = _ci_options_from_flags(args)
 
-    ui.success(f"Wrote {path}")
-    ui.info(f"project: {project}" + ("" if args.project else "  (from the repository name; edit if it differs)"))
-    if repository:
-        ui.info(f"repository: {repository}")
-    if dockerfiles:
-        ui.info("images: " + ", ".join(f"{d} -> {config.derive_slug(d)}" for d in dockerfiles))
+    if path.exists() and not args.force:
+        ui.info(f"{path} exists, kept as it is (--force overwrites it).")
     else:
-        ui.info("images: none found")
+        path.write_text(config.render(project, repository or None, dockerfiles), encoding="utf-8")
+        ui.success(f"Wrote {path}")
+        ui.info(f"project: {project}" + ("" if args.project else "  (from the repository name; edit if it differs)"))
+        if repository:
+            ui.info(f"repository: {repository}")
+        if dockerfiles:
+            ui.info("images: " + ", ".join(f"{d} -> {config.derive_slug(d)}" for d in dockerfiles))
+        else:
+            ui.info("images: none found")
+
+    if not args.no_ci:
+        _init_ci(args, ui, root, project, repository, remote or "", options)
 
     creds = credentials.load()
     if creds:
@@ -233,6 +241,261 @@ def cmd_init(args: argparse.Namespace, ui: UI) -> int:
     ui.out("")
     ui.info("Next: review the file, then run `tdxguard scan`.")
     return EXIT_OK
+
+
+def _ci_options_from_flags(args: argparse.Namespace) -> coverage.CIOptions:
+    return coverage.CIOptions(
+        dockerfiles=[coverage.check_dockerfile(d) for d in (args.dockerfile or [])],
+        image_ref=coverage.check_image_ref(args.image_ref or ""),
+        app_start_command=coverage.check_command(args.start_command or "", "--start-command"),
+        app_health_url=coverage.check_url(args.health_url or "", "--health-url"),
+        dast_target=coverage.check_url(args.dast_target or "", "--dast-target"),
+    )
+
+
+def detect_platform(remote: str, workflow: Optional[coverage.Workflow]) -> str:
+    if workflow is not None:
+        return workflow.platform
+    if not remote:
+        return coverage.GITHUB
+    return coverage.GITHUB if "github.com" in remote.lower() else coverage.GITLAB
+
+
+def _interactive(args: argparse.Namespace) -> bool:
+    if args.yes:
+        return False
+    try:
+        return sys.stdin.isatty() and sys.stdout.isatty()
+    except (AttributeError, ValueError):
+        return False
+
+
+def _ask(ui: UI, question: str, default: str = "") -> str:
+    suffix = f" [{default}]" if default else ""
+    try:
+        answer = input(f"  {question}{suffix}: ").strip()
+    except EOFError:
+        answer = ""
+    return answer or default
+
+
+def _ask_yes(ui: UI, question: str) -> bool:
+    return _ask(ui, question + " (Y/n)").lower() not in ("n", "no")
+
+
+def _ask_until_valid(ui: UI, question: str, check: Callable[[str], str]) -> str:
+    while True:
+        answer = _ask(ui, question)
+        try:
+            return check(answer)
+        except ConfigError as e:
+            ui.warn(e.message)
+
+
+def _complete_options_interactively(
+    ui: UI, platform: str, facts: coverage.RepoFacts, options: coverage.CIOptions
+) -> None:
+    ui.step("What else should TDxGuard scan? (Enter skips a question)")
+    if not options.dockerfiles and facts.dockerfiles:
+        if platform == coverage.GITHUB:
+            if _ask_yes(ui, f"Build and scan the images of {', '.join(facts.dockerfiles)} in CI?"):
+                options.dockerfiles = list(facts.dockerfiles)
+        else:
+            options.dockerfiles = list(facts.dockerfiles)
+            ui.info("GitLab scans an image your build job has already pushed; it does not build Dockerfiles.")
+    if not options.image_ref and platform == coverage.GITLAB and facts.dockerfiles:
+        options.image_ref = _ask_until_valid(
+            ui, f"Image your build job pushes, e.g. {coverage.GITLAB_IMAGE_REF_HINT}", coverage.check_image_ref
+        )
+    if not options.app_start_command:
+        ui.info("IAST (Aikido Zen) needs the app started in CI, with Zen embedded in it.")
+        for command, source in facts.start_hints:
+            ui.info(f"  found: {command}   ({source})")
+        options.app_start_command = _ask_until_valid(
+            ui, "Command that starts the app in CI", lambda v: coverage.check_command(v, "The start command")
+        )
+        if options.app_start_command and not options.app_health_url:
+            options.app_health_url = _ask_until_valid(
+                ui, f"URL that answers once it is up (default {coverage.DEFAULT_APP_HEALTH_URL})",
+                lambda v: coverage.check_url(v, "The health URL"),
+            )  # fmt: skip
+    if not options.dast_target:
+        ui.info("DAST: only scan an environment you own, and never production without approval.")
+        question = (
+            "URL for ZAP: the started app (e.g. http://127.0.0.1:8000) or a test environment"
+            if platform == coverage.GITHUB
+            else "URL of a deployed test or staging environment for ZAP"
+        )
+        options.dast_target = _ask_until_valid(ui, question, lambda v: coverage.check_url(v, "The URL"))
+
+
+def _init_ci(
+    args: argparse.Namespace,
+    ui: UI,
+    root: Path,
+    project: str,
+    repository: str,
+    remote: str,
+    options: coverage.CIOptions,
+) -> None:
+    existing = coverage.find_workflow(root)
+    platform = args.ci or detect_platform(remote, existing)
+    if existing is not None and existing.platform != platform:
+        existing = None
+    facts = coverage.inspect(root)
+
+    if _interactive(args):
+        _complete_options_interactively(ui, platform, facts, options)
+    else:
+        # Detected Dockerfiles become image inputs on GitHub, which builds them; GitLab
+        # cannot, the snippet only names them.
+        if not options.dockerfiles and facts.dockerfiles:
+            options.dockerfiles = list(facts.dockerfiles)
+        for command, source in facts.start_hints if not options.app_start_command else []:
+            ui.info(f"Possible start command for IAST: {command}   ({source}); pass it with --start-command.")
+
+    content = coverage.render_workflow(platform, project, repository, options)
+    target = root / coverage.workflow_path(platform)
+    suggested = coverage.suggested_inputs(platform, options)
+    ui.out("")
+
+    if existing is not None:
+        ui.step(f"{existing.path} already runs TDxGuard ({platform})")
+        changes = coverage.input_changes(existing.inputs, suggested)
+        for line in changes:
+            ui.info(line)
+        if not changes:
+            ui.info("No optional inputs to suggest; `tdxguard doctor` shows what is covered.")
+        if platform == coverage.GITHUB and args.force and existing.path == coverage.GITHUB_WORKFLOW:
+            target.write_text(content, encoding="utf-8")
+            ui.success(f"Overwrote {target} (--force)")
+        elif any(line.startswith(("+", "~")) for line in changes):
+            where = "the `with:` block" if platform == coverage.GITHUB else "the `variables:` block"
+            ui.info(f"Add the + lines to {where} of {existing.path}" + (
+                ", or run again with --force to overwrite it." if platform == coverage.GITHUB else "."))  # fmt: skip
+        return
+
+    if platform == coverage.GITLAB and target.exists():
+        # .gitlab-ci.yml is the project's whole pipeline: never overwritten, not even with --force.
+        ui.step(f"Add this to {target.name} (it is not overwritten):")
+        ui.out(content)
+        return
+    if target.exists() and not args.force:
+        ui.step(f"{target} exists and does not call the TDxGuard template; it is kept (--force overwrites it).")
+        ui.out(content)
+        return
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(content, encoding="utf-8")
+    ui.success(f"Wrote {target}")
+    kinds = coverage.configured_kinds(coverage.Workflow(platform, str(target), _plain_inputs(suggested)))
+    covered = [label for kind, label in coverage.KINDS if kinds.get(kind)]
+    ui.info(f"CI covers {len(covered)} of {len(coverage.KINDS)} kinds of scan: {', '.join(covered)}")
+    ui.info("`tdxguard doctor` shows what is missing and what TDxGuard has received.")
+
+
+def _plain_inputs(suggested: Dict[str, str]) -> Dict[str, Any]:
+    return {key: (value if value.startswith("|") else json.loads(value)) for key, value in suggested.items()}
+
+
+# --- doctor ---
+
+
+def cmd_doctor(args: argparse.Namespace, ui: UI) -> int:
+    root = gitinfo.find_root() or Path.cwd()
+    remote = gitinfo.remote_url(root) or ""
+    repository, repository_name = gitinfo.parse_remote(remote) if remote else ("", "")
+    workflow = coverage.find_workflow(root)
+    platform = args.ci or detect_platform(remote, workflow)
+    if workflow is not None and workflow.platform != platform:
+        workflow = None
+    facts = coverage.inspect(root)
+    project = (
+        args.project
+        or _doctor_project(root, workflow)
+        or config.product_name_from_repository(repository_name or root.name)
+    )
+
+    scan_coverage, state = _fetch_scan_coverage(ui, project, args.offline)
+    rows = coverage.diagnose(facts, workflow, platform, scan_coverage, state)
+    ok = coverage.exit_ok(rows)
+
+    if args.json:
+        print(json.dumps({
+            "project": project, "platform": platform, "workflow": workflow.path if workflow else None,
+            "server": state, "ok": ok,
+            "kinds": [{"kind": r.kind, "expected": r.expected, "why": r.why, "configured": r.configured,
+                       "received": r.received, "action": r.action, "detail": r.detail} for r in rows],
+        }, indent=2))  # fmt: skip
+        return EXIT_OK if ok or args.no_fail else EXIT_GATE
+
+    ui.step(f"Scan coverage of {project}")
+    ui.info(f"Workflow: {workflow.path} ({platform})" if workflow else f"Workflow: none found ({platform})")
+    ui.info(f"TDxGuard: {_server_state_text(state)}")
+    ui.out("")
+    ui.table(
+        ["Kind", "Expected", "Why", "In CI", "Received", "What to do"],
+        [[r.label, r.expected, r.why[:40], "yes" if r.configured else "no", r.received, r.action or "-"] for r in rows],
+    )
+    details = [r for r in rows if r.detail]
+    if workflow is None:
+        ui.out("")
+        ui.info("No TDxGuard workflow found: nothing is scanned in CI. `tdxguard init` writes one.")
+    elif details:
+        ui.out("")
+        for row in details:
+            first, *rest = row.detail.splitlines()
+            ui.info(f"{row.label}: {first}" if not rest else f"{row.label}: add to the workflow")
+            for line in [first] + rest if rest else []:
+                ui.info("    " + line)
+    ui.out("")
+    if ok:
+        ui.success("Everything expected is configured in CI.")
+        return EXIT_OK
+    missing = [r.label for r in rows if r.expected == coverage.YES and not r.configured]
+    ui.warn(f"Expected but not configured in CI: {', '.join(missing)}.")
+    return EXIT_OK if args.no_fail else EXIT_GATE
+
+
+def _doctor_project(root: Path, workflow: Optional[coverage.Workflow]) -> str:
+    try:
+        return config.load(root).project
+    except ConfigError:
+        pass
+    if workflow is not None:
+        value = workflow.inputs.get("product") or workflow.inputs.get("PRODUCT")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _fetch_scan_coverage(ui: UI, project: str, offline: bool) -> Tuple[Optional[Dict[str, Any]], str]:
+    creds = None if offline else credentials.load()
+    if creds is None:
+        return None, "offline"
+    try:
+        client = server.Client(creds.api, token=creds.token)
+        product = client.find_product(project)
+        # The list may leave out what the product's own page reports.
+        if product is not None and "scan_coverage" not in product and product.get("id") is not None:
+            product = client.product(product["id"])
+    except CLIError as e:
+        ui.warn(f"Could not ask TDxGuard: {e.message}")
+        return None, "offline"
+    if product is None:
+        return None, "unknown-product"
+    value = product.get("scan_coverage")
+    if not isinstance(value, dict):
+        return None, "old"
+    return value, "ok"
+
+
+def _server_state_text(state: str) -> str:
+    return {
+        "ok": "asked for what it received on the default branch",
+        "old": "this server does not report scan coverage yet",
+        "unknown-product": "no product with this name (--project to choose another)",
+        "offline": "not asked (not logged in, or --offline)",
+    }[state]
 
 
 # --- scan ---
@@ -264,7 +527,7 @@ def resolve_engine(
 ) -> str:
     """
     --engine, else $TDXGUARD_ENGINE, else `engine:` in .tdxguard.yml, else auto. `auto` is
-    docker when a Docker daemon answers, native otherwise.
+    docker when a Docker daemon answers and the scanner image can be used, native otherwise.
     """
     choice, source = "auto", "default"
     for value, where in (
@@ -321,7 +584,17 @@ def cmd_scan(args: argparse.Namespace, ui: UI) -> int:  # noqa: C901
     if args.log_opts and args.secrets_mode != "git":
         raise ConfigError("--log-opts applies to --secrets-mode git only.")
     docker_available = _DockerProbe()
-    engine = resolve_engine(getattr(args, "engine", None), os.environ, cfg.engine, docker_available)
+    scanner_image = os.environ.get("TDXGUARD_SCANNER_IMAGE") or DEFAULT_SCANNER_IMAGE
+
+    def docker_engine_usable() -> bool:
+        if not docker_available():
+            return False
+        if docker.image_usable(scanner_image):
+            return True
+        ui.info(f"The scanner image {scanner_image} cannot be pulled here; using the native engine instead.")
+        return False
+
+    engine = resolve_engine(getattr(args, "engine", None), os.environ, cfg.engine, docker_engine_usable)
     ui.debug(f"engine: {engine}")
     if engine == "docker" and args.secrets_mode == "git" and (root / ".git").is_file():
         # In a worktree .git is a file pointing to a path on this machine, which does not
@@ -398,7 +671,6 @@ def cmd_scan(args: argparse.Namespace, ui: UI) -> int:  # noqa: C901
     trivy_cache = cache_dir() / "scanner"  # one Trivy DB for both engines
     trivy_cache.mkdir(parents=True, exist_ok=True)
     if engine == "docker":
-        scanner_image = os.environ.get("TDXGUARD_SCANNER_IMAGE") or DEFAULT_SCANNER_IMAGE
         uid, gid = (os.getuid(), os.getgid()) if hasattr(os, "getuid") else (None, None)
         command = docker.scanner_command(
             image=scanner_image,
@@ -623,8 +895,10 @@ def _upload(
             failed += 1
             ui.out(ui.style("  upload failed: ", "red", "bold") + e.message)
 
-    url = _product_url(creds.server, product)
-    ui.success(f"Results are in branch {ui.style(branch, 'bold')}: {url}")
+    url = _results_url(creds.server, product, _find_branch_id(client, product, branch))
+    ui.success(f"Results: {url}")
+    apart = f" — {BRANCH_APART_NOTE}" if branch.startswith("local/") else ""
+    ui.info(f"(branch {ui.style(branch, 'bold')}{apart})")
     if failed:
         ui.error(f"{failed} report(s) did not reach TDxGuard.")
 
@@ -661,7 +935,45 @@ def _report_security_gate(ui: UI, client: server.Client, project: str) -> Option
 
 
 def _product_url(server_url: str, product: Dict[str, Any]) -> str:
-    return f"{server_url.rstrip('/')}/#/products/{product.get('id')}/show"
+    return f"{server_url.rstrip('/')}/products/{product.get('id')}/show"
+
+
+BRANCH_APART_NOTE = "local scans are kept apart from the main branch numbers"
+
+# The statuses of the frontend's default observation filter (OBSERVATION_STATUS_ACTIVE)
+ACTIVE_STATUSES = ["Open", "Affected", "In review"]
+
+
+def _find_branch_id(client: server.Client, product: Dict[str, Any], branch: str) -> Optional[int]:
+    """The id of the branch the reports went to; None when it cannot be found (the link then opens the product)."""
+    if product.get("id") is None:
+        return None
+    try:
+        found = client.find_branch(product["id"], branch)
+    except (ApiError, NetworkError):
+        return None
+    branch_id = found.get("id") if isinstance(found, dict) else None
+    return branch_id if isinstance(branch_id, int) else None
+
+
+def _results_url(server_url: str, product: Dict[str, Any], branch_id: Optional[int]) -> str:
+    """
+    The product's open observations on the branch, the way the frontend keeps a list's filter
+    in its URL (react-admin's filter query parameter, see frontend/src/core/observations/
+    risk_links.ts); without the branch's id the product page.
+    """
+    url = _product_url(server_url, product)
+    if branch_id is None:
+        return url
+    query = urllib.parse.urlencode(
+        {
+            "displayedFilters": "{}",
+            "filter": json.dumps({"current_status": ACTIVE_STATUSES, "branch": branch_id}, separators=(",", ":")),
+            "order": "ASC",
+            "sort": "current_priority",
+        }
+    )
+    return f"{url}?{query}"
 
 
 # --- tools ---
@@ -722,6 +1034,8 @@ COMMANDS = {
     "logout": cmd_logout,
     "whoami": cmd_whoami,
     "init": cmd_init,
+    "doctor": cmd_doctor,
+    "coverage": cmd_doctor,
     "scan": cmd_scan,
     "tools": cmd_tools,
 }
