@@ -1,6 +1,6 @@
 """tdxguard: scan a repository locally and send the results to TDxGuard."""
 
-__version__ = "0.1.0"
+__version__ = "0.1.3"
 
 DEFAULT_SERVER = "https://guard.tdadevelop.com"
 # Fallbacks only: `tdxguard login` reads the OIDC settings from the server's runtime

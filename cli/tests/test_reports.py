@@ -163,8 +163,17 @@ class TestUploadPlan(unittest.TestCase):
                 {"product_name": "p", "branch_name": "b", "parser_name": "SARIF"}, plan[1].fields("p", "b")
             )
 
-    def test_empty_betterleaks_is_skipped(self):
+    def test_clean_betterleaks_is_uploaded(self):
+        # A clean scan goes up too, so that TDxGuard records that the secrets scan ran
         for content in ("null", "[]"):
+            with tempfile.TemporaryDirectory() as directory:
+                out = Path(directory)
+                (out / "betterleaks.json").write_text(content)
+                plan = reports.upload_plan(out, {})
+                self.assertEqual([("betterleaks.json", "Betterleaks")], [(u.path.name, u.parser) for u in plan])
+
+    def test_broken_betterleaks_is_skipped(self):
+        for content in ("", "{}", "true"):
             with tempfile.TemporaryDirectory() as directory:
                 out = Path(directory)
                 (out / "betterleaks.json").write_text(content)

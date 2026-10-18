@@ -338,6 +338,7 @@ class TestInstall(InstallTestCase):
         with (
             patch.dict(tools.TOOLS, table, clear=True),
             patch.object(tools, "MIN_RULES", 1),
+            patch.object(tools, "RULE_LANGUAGES", ("python",)),
             patch("tdxguard.engine.tools.check_opengrep"),
         ):
             toolset = tools.ensure("linux-x86_64", self.root, downloader=download)
@@ -347,6 +348,13 @@ class TestInstall(InstallTestCase):
             tools.ensure("linux-x86_64", self.root, downloader=download)
             self.assertEqual(4, len(calls))
             self.assertEqual(toolset.opengrep, tools.toolset("linux-x86_64", self.root).opengrep)
+
+            # Rules extracted for another language list are stale although the archive is the
+            # same: an upgrade that adds a language extracts them again.
+            with patch.object(tools, "RULE_LANGUAGES", ("python", "php")):
+                self.assertIsNone(tools.installed(table["opengrep-rules"], "linux-x86_64", self.root))
+            marker = json.loads((toolset.rules / tools.MARKER).read_text())
+            self.assertEqual(["python"], marker["languages"])
 
             tools.clean(self.root)
             with self.assertRaises(ToolError) as cm:
@@ -365,7 +373,8 @@ class TestRules(InstallTestCase):
                     "opengrep-rules-abc/python/lang/correctness/x.yaml": b"not security",
                     "opengrep-rules-abc/go/security/y.yaml": b"b",
                     "opengrep-rules-abc/generic/secrets/security/z.yaml": b"c",
-                    "opengrep-rules-abc/java/security/j.yaml": b"other language",
+                    "opengrep-rules-abc/solidity/security/s.yaml": b"other language",
+                    "opengrep-rules-abc/terraform/aws/security/t.yaml": b"infrastructure, Trivy's",
                     "opengrep-rules-abc/python/security.yaml": b"a file named like the directory",
                     "opengrep-rules-abc/Pipfile": b"x",
                 },
@@ -374,7 +383,7 @@ class TestRules(InstallTestCase):
         )
         dest = Path(self.tmp.name) / "rules"
         dest.mkdir()
-        with patch.object(tools, "MIN_RULES", 3):
+        with patch.object(tools, "MIN_RULES", 3), patch.object(tools, "RULE_LANGUAGES", ("python", "go", "generic")):
             self.assertEqual(3, tools.extract_rules(archive, dest))
         files = sorted(p.relative_to(dest).as_posix() for p in dest.rglob("*") if p.is_file())
         self.assertEqual(
@@ -395,6 +404,29 @@ class TestRules(InstallTestCase):
         with self.assertRaises(ToolError) as cm:
             tools.extract_rules(archive, dest)
         self.assertIn("layout changed", cm.exception.message)
+
+    def test_language_without_rules(self):
+        """Enough rules in total must not hide a language whose directory went away."""
+        archive = Path(self.tmp.name) / "rules.tar.gz"
+        archive.write_bytes(tar_gz({f"top/python/security/{n}.yaml": b"a" for n in range(5)}))
+        dest = Path(self.tmp.name) / "rules"
+        dest.mkdir()
+        with (
+            patch.object(tools, "MIN_RULES", 5),
+            patch.object(tools, "RULE_LANGUAGES", ("python", "php")),
+            self.assertRaises(ToolError) as cm,
+        ):
+            tools.extract_rules(archive, dest)
+        self.assertIn("No security rules for php", cm.exception.message)
+
+    def test_rule_languages(self):
+        """The application languages of opengrep-rules; infrastructure as code is Trivy's."""
+        self.assertEqual(len(set(tools.RULE_LANGUAGES)), len(tools.RULE_LANGUAGES))
+        for language in ("python", "javascript", "typescript", "go", "php", "java", "kotlin", "scala", "ruby",
+                         "csharp", "c", "generic"):  # fmt: skip
+            self.assertIn(language, tools.RULE_LANGUAGES)
+        for language in ("terraform", "yaml", "dockerfile", "json"):
+            self.assertNotIn(language, tools.RULE_LANGUAGES)
 
     def test_traversal_refused(self):
         archive = Path(self.tmp.name) / "rules.tar.gz"

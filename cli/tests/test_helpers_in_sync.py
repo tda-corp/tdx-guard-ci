@@ -59,6 +59,16 @@ class TestEmbeddedCopies(unittest.TestCase):
                         f"the copy of {name} in ci-templates/{template} differs from {SOURCES[name]}",
                     )
 
+    def test_rule_languages_match_the_templates(self):
+        """The templates load the same opengrep-rules languages as the native engine and the scanner image."""
+        from tdxguard.engine.tools import RULE_LANGUAGES
+
+        for script in ("github/tdxguard.yml", "gitlab/tdxguard.yml", "local/tdxguard-scan.sh"):
+            with self.subTest(script=script):
+                text = (TEMPLATES / script).read_text(encoding="utf-8")
+                found = re.findall(r'OPENGREP_RULE_LANGUAGES[:=] ?"([^"]+)"', text)
+                self.assertEqual([" ".join(RULE_LANGUAGES)], found, f"ci-templates/{script}")
+
     def test_no_stale_copies_in_ci_templates(self):
         """The two helpers moved into the package; a file left behind would become a second source."""
         for name in ("sarif-enrich.py", "opengrep-prune-rules.py"):

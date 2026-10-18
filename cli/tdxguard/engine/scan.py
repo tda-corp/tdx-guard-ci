@@ -25,7 +25,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Set
 
 from tdxguard import frozen
 from tdxguard.engine import counts
@@ -436,14 +436,19 @@ def make_work_dir(base: Optional[Path] = None) -> Path:
     A private temporary directory. Opengrep prefixes rule ids with the rules' path, and
     sarif-enrich.py trims an id at its first segment named like a rule root, so no segment
     of the work directory may be one ("/var/folders/go/..." on a Mac would cut the id there).
+    The id joins the path with dots, so a directory named "c.smith" counts as "c" and "smith".
     """
     work = Path(tempfile.mkdtemp(prefix="tdxguard.", dir=str(base) if base else None)).resolve()
-    if not set(work.parts) & set(RULE_LANGUAGES):
+    if not _id_segments(work) & set(RULE_LANGUAGES):
         return work
     shutil.rmtree(str(work), ignore_errors=True)
     fallback = Path.home() / ".cache" / "tdxguard" / "work"
     fallback.mkdir(parents=True, exist_ok=True)
     return Path(tempfile.mkdtemp(prefix="tdxguard.", dir=str(fallback))).resolve()
+
+
+def _id_segments(path: Path) -> Set[str]:
+    return {segment for part in path.parts for segment in part.split(".")}
 
 
 def write_summary(out: Path, summary: Dict[str, Any]) -> None:

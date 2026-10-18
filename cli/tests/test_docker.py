@@ -1,5 +1,7 @@
 import os
+import subprocess  # nosec B404
 import unittest
+from unittest import mock
 
 from tdxguard import docker
 
@@ -180,3 +182,40 @@ class TestAvailability(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestImageUsable(unittest.TestCase):
+    def _run(self, *codes):
+        calls = []
+        results = iter(codes)
+
+        def run(command, **kwargs):
+            calls.append(command)
+            return subprocess.CompletedProcess(command, next(results), "", "")
+
+        return calls, run
+
+    def test_present_image_is_not_pulled(self):
+        calls, run = self._run(0)
+        with mock.patch.object(docker.subprocess, "run", run):
+            self.assertTrue(docker.image_usable(IMAGE))
+        self.assertEqual([["docker", "image", "inspect", IMAGE]], calls)
+
+    def test_missing_image_is_pulled(self):
+        calls, run = self._run(1, 0)
+        with mock.patch.object(docker.subprocess, "run", run):
+            self.assertTrue(docker.image_usable(IMAGE))
+        self.assertEqual(["docker", "pull", "-q", IMAGE], calls[1])
+
+    def test_refused_pull_is_not_usable(self):
+        # a private package without `docker login`: "denied" from the registry
+        calls, run = self._run(1, 1)
+        with mock.patch.object(docker.subprocess, "run", run):
+            self.assertFalse(docker.image_usable(IMAGE))
+
+    def test_timeout_is_not_usable(self):
+        def run(command, **kwargs):
+            raise subprocess.TimeoutExpired(command, 1)
+
+        with mock.patch.object(docker.subprocess, "run", run):
+            self.assertFalse(docker.image_usable(IMAGE))

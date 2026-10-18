@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tdxguard"
-version = "0.1.0"
+version = "0.1.3"
 description = "Command line tool that scans a repository and sends the results to TDxGuard"
 readme = "README.md"
 requires-python = ">=3.9"

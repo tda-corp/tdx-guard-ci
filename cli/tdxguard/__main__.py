@@ -17,13 +17,15 @@ DESCRIPTION = """\
 Scan a repository with the TDxGuard scanners and send the results to TDxGuard.
 
   tdxguard login     sign in with TDxSSO in the browser
-  tdxguard init      write .tdxguard.yml for this repository
+  tdxguard init      write .tdxguard.yml and the CI workflow for this repository
+  tdxguard doctor    what is scanned, what is missing and what TDxGuard received
   tdxguard scan      scan, upload and check the gate
   tdxguard tools     the scanner tools of the native engine (list, install, clean)
 """
 
 EPILOG = """\
-exit codes: 0 ok, 1 the gate in .tdxguard.yml was exceeded, 2 error (scanner, upload, login, config)
+exit codes: 0 ok, 1 the gate in .tdxguard.yml was exceeded (doctor: an expected scan is not in CI),
+            2 error (scanner, upload, login, config)
 environment: TDXGUARD_TOKEN and TDXGUARD_SERVER replace the login (CI);
              TDXGUARD_ENGINE picks the engine (auto, docker, native);
              TDXGUARD_SCANNER_IMAGE overrides the scanner image (docker engine);
@@ -60,9 +62,49 @@ def build_parser() -> argparse.ArgumentParser:
     whoami = sub.add_parser("whoami", parents=[common], help="show the server, the user and the token expiry")
     whoami.add_argument("--json", action="store_true", help="print JSON")
 
-    init = sub.add_parser("init", parents=[common], help="write .tdxguard.yml for this repository")
+    init = sub.add_parser(
+        "init",
+        parents=[common],
+        help="write .tdxguard.yml and the CI workflow for this repository",
+        description="Writes .tdxguard.yml (local scans) and the TDxGuard CI workflow with what it detects: "
+        "Dockerfiles become the image scan; a start command (asked, or --start-command) switches on IAST, "
+        "a target URL DAST. Asks on a terminal; flags and --yes for scripts. An existing workflow is not "
+        "overwritten: the inputs to add are listed instead.",
+    )
     init.add_argument("--project", help="TDxGuard product name (default: the repository name)")
-    init.add_argument("--force", action="store_true", help="overwrite an existing .tdxguard.yml")
+    init.add_argument(
+        "--force", action="store_true", help="overwrite an existing .tdxguard.yml and GitHub workflow file"
+    )
+    init.add_argument("--ci", choices=("github", "gitlab"), help="CI platform (default: from the git remote)")
+    init.add_argument("--no-ci", action="store_true", help="write .tdxguard.yml only, no CI workflow")
+    init.add_argument(
+        "--dockerfile",
+        action="append",
+        metavar="PATH",
+        help='Dockerfile to build and scan in CI, optionally with its context: "web/Dockerfile web" '
+        "(repeatable; default: every Dockerfile found)",
+    )
+    init.add_argument("--image-ref", metavar="REF", help="image in a registry to scan (GitLab: the one CI pushed)")
+    init.add_argument("--start-command", metavar="CMD", help="command that starts the app in CI (IAST)")
+    init.add_argument("--health-url", metavar="URL", help="URL that answers once the app is up")
+    init.add_argument("--dast-target", metavar="URL", help="URL for ZAP: the started app or a test environment")
+    init.add_argument("--yes", action="store_true", help="ask nothing, use the flags and what is detected")
+
+    for name, aliases in (("doctor", ["coverage"]),):
+        doctor = sub.add_parser(
+            name,
+            aliases=aliases,
+            parents=[common],
+            help="what this repository should be scanned for, what CI scans, what TDxGuard received",
+            description="Inspects the repository (Dockerfiles, IaC files, manifests and lockfiles, the CI "
+            "workflow and its inputs) and, when logged in, the product's scan coverage in TDxGuard. Exit "
+            "code 0 when every expected kind of scan is configured in CI, 1 otherwise (--no-fail: always 0).",
+        )
+        doctor.add_argument("--project", help="TDxGuard product name (default: .tdxguard.yml, the workflow)")
+        doctor.add_argument("--ci", choices=("github", "gitlab"), help="CI platform (default: detected)")
+        doctor.add_argument("--offline", action="store_true", help="do not ask TDxGuard")
+        doctor.add_argument("--no-fail", action="store_true", help="exit 0 even when something is missing")
+        doctor.add_argument("--json", action="store_true", help="print JSON")
 
     scan = sub.add_parser(
         "scan",

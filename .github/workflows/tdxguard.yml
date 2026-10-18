@@ -624,6 +624,16 @@ jobs:
                                                    None of the eleven repositories uses jQuery.
             python/flask directly-returned-format-string
                                                    any helper that returns an f-string.
+            php/symfony symfony-non-literal-redirect
+                                                   `$this->redirect(...)`: 157 controller redirects
+                                                   in HumHub, a Yii application that is not Symfony.
+
+          One more is confined the same way although it matches markup rather than a name:
+
+            python/django django-no-csrf-token     every POST <form> without `{% csrf_token %}`,
+                                                   in any template language: Thymeleaf in Spring
+                                                   PetClinic (3) and WebGoat (107), where Spring
+                                                   Security adds the token and Django is absent.
 
           For those rules this script finds the directories whose dependency manifest declares the
           framework and restricts the rule to them with `paths.include`. A repository holds a
@@ -632,10 +642,15 @@ jobs:
           Django rule to apps/api/. Where no directory declares the framework the rule is removed.
 
           Manifests are those a project declares directly (pyproject.toml, requirements*.txt and
-          requirements/*.txt, setup.py, setup.cfg, Pipfile, package.json, go.mod). Lockfiles are
-          not read: they list transitive dependencies. jQuery is also detected where it is loaded
-          the old way, as a jquery*.js file or a <script> that names it, and is then scoped to the
-          nearest directory above that file with a manifest.
+          requirements/*.txt, setup.py, setup.cfg, Pipfile, package.json, go.mod, composer.json).
+          Lockfiles are not read: they list transitive dependencies. Symfony counts as declared
+          through symfony/framework-bundle, the package that provides `$this->redirect()`; Laravel
+          and Yii applications pull in other symfony/* components without being Symfony. jQuery is
+          also detected where it is loaded the old way, as a jquery*.js file or a <script> that
+          names it, and is then scoped to the nearest directory above that file with a manifest.
+
+          WordPress plugin rules need nothing here: each carries `paths.include:
+          wp-content/plugins/**` itself.
 
           Directories given after the repository are not searched: the full rule tree is unpacked
           inside the checkout and carries a Pipfile of its own.
@@ -655,11 +670,20 @@ jobs:
           # Rules that match a bare method name, per framework: rule files relative to the rules
           # directory, or a directory whose every rule file qualifies.
           NAME_ONLY_RULES = {
-              "django": ["python/django/security/audit/query-set-extra.yaml"],
+              "django": [
+                  "python/django/security/audit/query-set-extra.yaml",
+                  "python/django/security/django-no-csrf-token.yaml",
+              ],
               "flask": ["python/flask/security/audit/directly-returned-format-string.yaml"],
               "jquery": ["javascript/jquery/security"],
+              "symfony": ["php/symfony/security/audit/symfony-non-literal-redirect.yaml"],
           }
-          PACKAGES = {"django": ["django"], "flask": ["flask"], "jquery": ["jquery"]}
+          PACKAGES = {
+              "django": ["django"],
+              "flask": ["flask"],
+              "jquery": ["jquery"],
+              "symfony": ["symfony/framework-bundle"],
+          }
 
           MANIFEST_PATTERNS = [
               "pyproject.toml",
@@ -670,6 +694,7 @@ jobs:
               "Pipfile",
               "package.json",
               "go.mod",
+              "composer.json",
           ]
           SKIP_DIRECTORIES = {"node_modules", ".venv", "venv", "vendor", ".git", "dist", "build"}
           RULE_ID = re.compile(r"^(\s*)- id:", re.MULTILINE)
@@ -1054,11 +1079,11 @@ jobs:
           BAO_ROLE: ${{ inputs.bao_role }}
         run: |
           . "$TG/tdxguard-lib.sh"
-          # Betterleaks writes null or [] when clean, which its parser rejects; skip it. An
-          # empty new-commit scan does not mean an old secret in history is gone.
-          if [ -f betterleaks.json ] && [ "$(jq 'length' betterleaks.json)" -gt 0 ]; then
-            tg_push betterleaks.json "parser_name=Betterleaks"
-          fi
+          # Pushed also when clean (null or []): without it TDxGuard cannot tell a product
+          # scanned clean from one never scanned for secrets. TDxGuard records the run and
+          # leaves the open secrets alone, because an empty new-commit scan does not mean an
+          # old secret in the history is gone (rotate it, then close the finding).
+          tg_push betterleaks.json "parser_name=Betterleaks"
           tg_row "Betterleaks (secrets)" betterleaks.json length length
           tg_finish
 
@@ -1088,6 +1113,12 @@ jobs:
     env:
       OPENGREP_VERSION: "1.29.0"
       OPENGREP_RULES_SHA: "f1d2b562b414783763fd02a6ed2736eaed622efa"
+      # The opengrep-rules languages whose security/ rules are loaded, and the rule-id roots
+      # sarif-enrich.py trims to. The same list as RULE_LANGUAGES in the CLI
+      # (cli/tdxguard/engine/tools.py, where the reasons for what is left out are); a test
+      # fails when they differ. Infrastructure as code (terraform, yaml, dockerfile) is
+      # Trivy's job, not Opengrep's.
+      OPENGREP_RULE_LANGUAGES: "python javascript typescript go generic php java kotlin scala ruby csharp c"
     steps:
       - uses: actions/checkout@v7
       # The helper scripts from the tools job, unpacked outside the checkout so that they are
@@ -1161,22 +1192,35 @@ jobs:
           # directory, and Betterleaks already covers secrets properly -- against new
           # commits only, which whole-tree rule matching can never be.
           mkdir -p ogrules-security
-          while IFS= read -r RULE_DIR; do
-            DEST="ogrules-security/${RULE_DIR#ogrules/}"
-            mkdir -p "$(dirname "$DEST")"
-            cp -R "$RULE_DIR" "$DEST"
-          done < <(find ogrules/python ogrules/javascript ogrules/typescript \
-                        ogrules/go ogrules/generic -type d -name security)
+          for LANGUAGE in $OPENGREP_RULE_LANGUAGES; do
+            if [ ! -d "ogrules/$LANGUAGE" ]; then
+              echo "::error::opengrep-rules has no $LANGUAGE directory; the ruleset layout changed."
+              exit 1
+            fi
+            while IFS= read -r RULE_DIR; do
+              DEST="ogrules-security/${RULE_DIR#ogrules/}"
+              mkdir -p "$(dirname "$DEST")"
+              cp -R "$RULE_DIR" "$DEST"
+            done < <(find "ogrules/$LANGUAGE" -type d -name security)
+          done
 
           # Fail loudly rather than scan with an empty ruleset. A zero-rule scan exits 0
           # and reports nothing, which is indistinguishable from clean code -- the exact
-          # failure this pipeline has been bitten by before.
+          # failure this pipeline has been bitten by before. The total (about 930 at the
+          # pinned commit) catches a ruleset that came out near-empty, the per-language
+          # count a language that lost its rules while the others kept theirs.
           RULE_COUNT=$(find ogrules-security -name "*.yaml" | wc -l)
           echo "security rules loaded: $RULE_COUNT"
           if [ "$RULE_COUNT" -lt 100 ]; then
             echo "::error::Only $RULE_COUNT security rules found; the ruleset layout changed."
             exit 1
           fi
+          for LANGUAGE in $OPENGREP_RULE_LANGUAGES; do
+            if [ -z "$(find "ogrules-security/$LANGUAGE" -name '*.yaml' 2>/dev/null | head -n 1)" ]; then
+              echo "::error::No security rules for $LANGUAGE; the ruleset layout changed."
+              exit 1
+            fi
+          done
 
           # Then confine the few framework rules that match a bare method name to the
           # subprojects that declare the framework. python/django's avoid-query-set-extra
@@ -1210,7 +1254,7 @@ jobs:
       # (Opengrep already embeds region.snippet, so this only rewrites the ids.)
       - name: Clean up Opengrep rule ids
         run: |
-          python3 "$TG/sarif-enrich.py" opengrep.sarif . --rule-roots python,javascript,typescript,go,generic --context 5 --expand-context
+          python3 "$TG/sarif-enrich.py" opengrep.sarif . --rule-roots "${OPENGREP_RULE_LANGUAGES// /,}" --context 5 --expand-context
       - name: Push the results to TDxGuard
         id: push
         if: always()
@@ -1247,6 +1291,7 @@ jobs:
     needs: [tools]
     outputs:
       rows: ${{ steps.push.outputs.rows }}
+      image_hint: ${{ steps.dockerfiles.outputs.hint }}
     env:
       TRIVY_VERSION: "0.74.0"
     steps:
@@ -1310,6 +1355,24 @@ jobs:
       # CVE. SecObserve's SARIF parser only extracts vulnerability_id for Dependency-Check,
       # so Trivy's ruleId = CVE-xxxx is dropped -> the finding lands in the database with an
       # empty vulnerability_id, no CVSS, no EPSS and no component.
+      # A repository that has a Dockerfile but declares neither dockerfile nor image_ref ships
+      # an image nobody scans: the CVEs of its base image and of the OS packages installed
+      # into it never reach TDxGuard, and `trivy fs .` on the source cannot see them. Say so
+      # where people look, the job summary and the pull request comment. A warning only.
+      - name: Look for a Dockerfile without an image scan
+        id: dockerfiles
+        if: inputs.dockerfile == '' && inputs.image_ref == ''
+        run: |
+          # The same pattern TDxGuard uses on the IaC findings; at most three names, and only
+          # characters that cannot form a workflow command.
+          FOUND=$(git ls-files | grep -iE '(^|/)[^/]*(dockerfile|containerfile)[^/]*$' \
+            | grep -viE '\.dockerignore$' | head -3 | tr -cd 'A-Za-z0-9._/\n-' | paste -sd, - | sed 's/,/, /g')
+          if [ -n "$FOUND" ]; then
+            MSG="Dockerfile found ($FOUND), but no container image is scanned. Set dockerfile: (built and scanned in this run, never pushed) or image_ref: in the TDxGuard workflow to scan the base image and the OS packages."
+            echo "::warning::$MSG"
+            { echo "> [!WARNING]"; echo "> $MSG"; } >> "$GITHUB_STEP_SUMMARY"
+            echo "hint=$MSG" >> "$GITHUB_OUTPUT"
+          fi
       - name: Scan dependencies and infrastructure
         run: |
           trivy fs . --scanners misconfig --format sarif --output trivy.sarif \
@@ -1847,6 +1910,7 @@ jobs:
           ROWS_TRIVY: ${{ needs.trivy.outputs.rows }}
           ROWS_IMAGE: ${{ needs.image_scan.outputs.rows }}
           ROWS_RUNTIME: ${{ needs.runtime.outputs.rows }}
+          IMAGE_HINT: ${{ needs.trivy.outputs.image_hint }}
         run: |
           set -uo pipefail
           BRANCH="${GITHUB_REF_NAME}"
@@ -1861,12 +1925,17 @@ jobs:
             echo
             echo "_Severe = secrets, ERROR level, CRITICAL/HIGH, or an attack reaching a sink._"
             echo
+            if [ -n "${IMAGE_HINT:-}" ]; then
+              echo "> [!WARNING]"
+              echo "> $IMAGE_HINT"
+              echo
+            fi
             if [ -n "${SECOBSERVE_UI_URL:-}" ]; then
               PID=$(curl -sS -G "$SECOBSERVE_URL/api/products/" --data-urlencode "name=$PRODUCT" \
                 -H "Authorization: APIToken $SECOBSERVE_API_TOKEN" \
                 | jq -r --arg n "$PRODUCT" '.results[] | select(.name==$n) | .id' | head -1)
               if [ -n "$PID" ]; then
-                echo "Details, triage and history: [$PRODUCT in TDxGuard]($SECOBSERVE_UI_URL/#/products/$PID/show)"
+                echo "Details, triage and history: [$PRODUCT in TDxGuard]($SECOBSERVE_UI_URL/products/$PID/show)"
               else
                 echo "Details in TDxGuard: $SECOBSERVE_UI_URL"
               fi

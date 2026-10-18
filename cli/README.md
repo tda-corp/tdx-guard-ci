@@ -7,7 +7,8 @@ is not (see [Engines](#engines-docker-or-native)).
 
 ```
 tdxguard login        # sign in with TDxSSO in the browser
-tdxguard init         # write .tdxguard.yml for this repository
+tdxguard init         # write .tdxguard.yml and the CI workflow for this repository
+tdxguard doctor       # what CI scans, what is missing, what TDxGuard received
 tdxguard scan         # scan, upload to TDxGuard, check the gate
 ```
 
@@ -123,6 +124,8 @@ from the git remote, and the tool lists every Dockerfile it finds (`Dockerfile`,
 overwrite an existing file unless you pass `--force`. Pass `--project NAME` to choose the
 product name yourself.
 
+`init` then writes the CI workflow too (see [Full coverage](#full-coverage-init-and-doctor)).
+
 ```yaml
 project: tdx-scribe                # TDxGuard product name (required)
 repository: tda-corp/tdx-scribe    # optional; used when the project is created
@@ -156,6 +159,61 @@ gate:                              # optional; `tdxguard scan` exits 1 when exce
 The tool rejects unknown keys and wrong types, and the message names the key path, for example
 `.tdxguard.yml: images[1].dockerfile: file not found: web/Dockerfile`.
 
+## Full coverage: `init` and `doctor`
+
+Without optional inputs the CI runs three scans: secrets, code (SAST), and dependencies plus
+infrastructure as code (Trivy). Container images, IAST (Aikido Zen) and DAST (ZAP, Nuclei)
+need inputs in the workflow. Two commands make that visible.
+
+**`tdxguard init`** writes the CI workflow next to `.tdxguard.yml`:
+`.github/workflows/tdxguard.yml` on GitHub, or prints the block for `.gitlab-ci.yml` on GitLab.
+Every Dockerfile found becomes the image scan (GitHub builds them; GitLab only scans an image
+your build job pushed, `--image-ref`). A `start` script in `package.json` or a compose service
+with a port is shown as a possible start command, never written on its own. On a terminal it
+asks; in scripts pass flags and `--yes`.
+
+| Flag | |
+|---|---|
+| `--ci github\|gitlab` | default: from the git remote |
+| `--dockerfile PATH [CONTEXT]` | repeatable; default: every Dockerfile found |
+| `--image-ref REF` | an image in a registry (GitLab: `$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA` when your build job pushes it) |
+| `--start-command CMD`, `--health-url URL` | start the app in CI: IAST, and on GitHub the in-job ZAP scan |
+| `--dast-target URL` | URL for ZAP. Only an environment you own, never production without approval |
+| `--yes`, `--no-ci`, `--force` | ask nothing; skip the workflow; overwrite the files |
+
+An existing workflow is not overwritten without `--force`; `init` lists the inputs to add
+instead (`+` new, `~` different, `=` already set). `.gitlab-ci.yml` is never overwritten.
+
+**`tdxguard doctor`** (alias `coverage`) prints one row per kind of scan: whether the
+repository needs it and why (Dockerfiles, IaC files, manifests and lockfiles, a start command),
+whether the workflow configures it, what TDxGuard received for the default branch (when logged
+in and the server reports `scan_coverage`), and the exact line to add.
+
+```
+$ tdxguard doctor
+  Kind                    Expected   Why                    In CI  Received    What to do
+  Container images        yes        Dockerfile             no     never       dockerfile: "Dockerfile"
+  Runtime (IAST)          suggested  package.json: "start"  no     never       app_start_command: "npm start"
+```
+
+The code (SAST) row names the repository's languages that Opengrep has security rules for,
+most files first. Opengrep loads the security rules of opengrep-rules for Python, JavaScript,
+TypeScript, Go, PHP, Java, Kotlin, Scala, Ruby, C# and C, plus language-independent
+patterns (`RULE_LANGUAGES` in `tdxguard/engine/tools.py`). Code in any other language, Rust,
+Swift, Dart or C++ for example, is not analysed, and doctor says so under the table:
+
+```
+Code (SAST): Opengrep has no rules for rust (42 files): SAST does not analyse that code.
+```
+
+Exit code 0 when every kind marked `yes` is configured in CI, 1 otherwise, 2 on an error.
+`--no-fail` always exits 0; `--offline` does not ask TDxGuard; `--json` prints JSON.
+IAST and DAST are `suggested`, not required: they need the app to embed Zen and a target the
+team owns.
+
+The same questions, with a live preview, are on the **New project** page and on each product's
+**Integration** tab in TDxGuard.
+
 ## Scan
 
 ```
@@ -180,7 +238,8 @@ $ tdxguard scan
   betterleaks.json: 0 new, 0 resolved
   opengrep.sarif: 3 new, 0 resolved
   ...
-  ok Results are in branch local/jane.doe/feature/login: https://guard.tdadevelop.com/#/products/42/show
+  ok Results: https://guard.tdadevelop.com/products/42/show?displayedFilters=%7B%7D&filter=...%22branch%22%3A118%7D&...
+  (branch local/jane.doe/feature/login — local scans are kept apart from the main branch numbers)
   TDxGuard security gate: passed (this reflects the default branch, not the local branch just uploaded)
   local gate failed: 2 critical finding(s), the gate allows 0
 ```
@@ -249,7 +308,7 @@ misconfigurations and image secrets, so it can be stricter than CI.
 |---|---|---|
 | `docker` | in the scanner image `ghcr.io/tda-corp/tdxguard-scanner:v1` | a running Docker daemon |
 | `native` | on this machine, from `~/.cache/tdxguard/tools` | nothing (the standalone executable, or Python with pipx); the network once, for the first download |
-| `auto` (default) | `docker` when a Docker daemon answers, otherwise `native` | |
+| `auto` (default) | `docker` when a Docker daemon answers and the scanner image is present or can be pulled, otherwise `native` | |
 
 Choose with `--engine`, else `TDXGUARD_ENGINE`, else `engine:` in `.tdxguard.yml`. Both
 engines run the same Python code (the scanner image installs this package and calls
@@ -262,9 +321,11 @@ those `images:` entries are skipped with a warning, and the scan goes on. Regist
 the Dockerfile images and Trivy reads them from the daemon.
 
 **The tools cache.** On first use the native engine downloads Betterleaks 1.8.1, Opengrep
-1.29.0 with its rules (opengrep-rules at a pinned commit, the security directories only, as
-in CI) and Trivy 0.74.0 into `~/.cache/tdxguard/tools/<tool>/<version>/` (or
-`$TDXGUARD_TOOLS_DIR`), about 250 MB. Every download is checked against a sha256 pinned in the
+1.29.0 with its rules (opengrep-rules at a pinned commit, only the security directories of
+the languages listed under `doctor` above, as in CI) and Trivy 0.74.0 into
+`~/.cache/tdxguard/tools/<tool>/<version>/` (or `$TDXGUARD_TOOLS_DIR`), about 250 MB. The
+rules' install records that language list: when an upgrade changes it (0.1.3 added PHP, Java,
+Kotlin, Scala, Ruby, C# and C), the 1 MB rules archive is downloaded and extracted again. Every download is checked against a sha256 pinned in the
 package (`tdxguard/engine/tools.py`, the same table the scanner image is built from) before
 anything is unpacked, and moved into place only when complete. On Linux, Opengrep's musl
 build is used on Alpine and its glibc (manylinux) build elsewhere. Trivy's database is shared

@@ -50,8 +50,9 @@ def upload_plan(out: Path, image_refs: Mapping[str, str]) -> List[Upload]:
     """
     plan: List[Upload] = []
     betterleaks = out / "betterleaks.json"
-    # Betterleaks writes null or [] when it finds nothing, which its parser rejects.
-    if betterleaks.is_file() and _non_empty_list(load_json(betterleaks)):
+    # Also when Betterleaks found nothing (null or []), like the CI templates: TDxGuard then
+    # records that the secrets scan ran, and leaves the open secrets alone.
+    if betterleaks.is_file() and _betterleaks_report(betterleaks):
         plan.append(Upload(betterleaks, "Betterleaks"))
     for name, parser in (("opengrep.sarif", "SARIF"), ("trivy.sarif", "SARIF"), ("sbom.cdx.json", "CycloneDX")):
         if (out / name).is_file():
@@ -68,8 +69,14 @@ def upload_plan(out: Path, image_refs: Mapping[str, str]) -> List[Upload]:
     return plan
 
 
-def _non_empty_list(data: Any) -> bool:
-    return isinstance(data, list) and len(data) > 0
+def _betterleaks_report(path: Path) -> bool:
+    """A list of findings, empty included, or the null of a clean scan; not a broken file."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return False
+    return data is None or isinstance(data, list)
 
 
 # --- severity counts ---

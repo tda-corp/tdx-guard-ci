@@ -262,15 +262,19 @@ class TestEnvironment(unittest.TestCase):
     def test_work_dir_avoids_rule_root_segments(self):
         """sarif-enrich.py trims a rule id at its first segment named like a rule root."""
         with tempfile.TemporaryDirectory() as tmp:
-            trap = Path(tmp) / "go"
-            trap.mkdir()
-            with patch.dict(os.environ, {"HOME": tmp, "USERPROFILE": tmp}):
-                work = scan.make_work_dir(trap)
-            try:
-                self.assertFalse(set(work.parts[len(Path(tmp).resolve().parts) :]) & set(tools.RULE_LANGUAGES))
-                self.assertTrue(work.is_dir())
-            finally:
-                shutil.rmtree(work, ignore_errors=True)
+            # "c.smith" is two segments of a rule id, "c" and "smith"
+            for name in ("go", "c.smith"):
+                trap = Path(tmp) / name
+                trap.mkdir()
+                with patch.dict(os.environ, {"HOME": tmp, "USERPROFILE": tmp}):
+                    work = scan.make_work_dir(trap)
+                try:
+                    below = work.parts[len(Path(tmp).resolve().parts) :]
+                    segments = {segment for part in below for segment in part.split(".")}
+                    self.assertFalse(segments & set(tools.RULE_LANGUAGES), work)
+                    self.assertTrue(work.is_dir())
+                finally:
+                    shutil.rmtree(work, ignore_errors=True)
 
     def test_summary_written_atomically(self):
         with tempfile.TemporaryDirectory() as tmp:
