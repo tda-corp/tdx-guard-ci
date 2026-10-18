@@ -6,7 +6,7 @@ import argparse
 import sys
 from typing import List, Optional
 
-from tdxguard import __version__, commands, frozen
+from tdxguard import __version__, assessment, commands, frozen
 from tdxguard.config import ENGINES
 from tdxguard.engine.scan import SCANNERS
 from tdxguard.engine.tools import PLATFORMS
@@ -20,6 +20,7 @@ Scan a repository with the TDxGuard scanners and send the results to TDxGuard.
   tdxguard init      write .tdxguard.yml and the CI workflow for this repository
   tdxguard doctor    what is scanned, what is missing and what TDxGuard received
   tdxguard scan      scan, upload and check the gate
+  tdxguard report    the security assessment report of the project (HTML and PDF)
   tdxguard tools     the scanner tools of the native engine (list, install, clean)
 """
 
@@ -29,7 +30,8 @@ exit codes: 0 ok, 1 the gate in .tdxguard.yml was exceeded (doctor: an expected 
 environment: TDXGUARD_TOKEN and TDXGUARD_SERVER replace the login (CI);
              TDXGUARD_ENGINE picks the engine (auto, docker, native);
              TDXGUARD_SCANNER_IMAGE overrides the scanner image (docker engine);
-             TDXGUARD_TOOLS_DIR moves the tools cache (native engine); NO_COLOR disables colours
+             TDXGUARD_TOOLS_DIR moves the tools cache (native engine);
+             TDXGUARD_BROWSER is the browser that prints the report to PDF; NO_COLOR disables colours
 """
 
 
@@ -140,6 +142,49 @@ def build_parser() -> argparse.ArgumentParser:
     )
     scan.add_argument("--keep", metavar="DIR", help="write the reports to DIR (default: ~/.cache/tdxguard/reports)")
     scan.add_argument("--json", action="store_true", help="print the result as JSON on stdout")
+
+    report = sub.add_parser(
+        "report",
+        parents=[common],
+        help="the security assessment report of the project, as HTML and PDF",
+        description="Fetches the product's findings, decisions and scan history from TDxGuard (with your "
+        "permissions) and writes the security assessment report: <out>.html, and <out>.pdf when Chrome, "
+        "Chromium or Edge is installed (printed headless; TDXGUARD_BROWSER picks another). Fetching takes "
+        "10 to 60 seconds on a large product.",
+    )
+    report.add_argument("--product", help="TDxGuard product name (default: project of .tdxguard.yml)")
+    report_branch = report.add_mutually_exclusive_group()
+    report_branch.add_argument("--branch", help="branch to report on (default: the product's default branch)")
+    report_branch.add_argument("--all-branches", action="store_true", help="report on all branches together")
+    report.add_argument(
+        "--lang", choices=assessment.LANGUAGES, default="vi", help="language of the report (default: vi)"
+    )
+    report.add_argument(
+        "--out",
+        metavar="PATH",
+        help="file name without extension, or a directory: --out report writes report.html and report.pdf "
+        "(default: <product>-security-report-<lang>)",
+    )
+    report.add_argument("--open", action="store_true", help="open the PDF (or the HTML) when it is written")
+    report.add_argument("--no-pdf", action="store_true", help="write the HTML only")
+    report.add_argument("--markdown", action="store_true", help="also write <out>.md")
+    report.add_argument("--csv", action="store_true", help="also write every finding as <out>.csv")
+    report.add_argument(
+        "--period-days",
+        type=int,
+        choices=assessment.PERIODS,
+        default=30,
+        help="reporting period of the changes and the trend (default: 30)",
+    )
+    report.add_argument("--prepared-for", metavar="TEXT", help="recipient, e.g. the customer's security team")
+    report.add_argument("--prepared-by", metavar="TEXT", help="who prepared it (default: TDA security team)")
+    report.add_argument(
+        "--classification", metavar="TEXT", help="marking on the cover and every page (default: Confidential)"
+    )
+    report.add_argument("--save-data", metavar="FILE", help="also save the fetched data as JSON")
+    report.add_argument(
+        "--from-data", metavar="FILE", help="render data saved with --save-data again, without the network"
+    )
 
     tools = sub.add_parser(
         "tools",

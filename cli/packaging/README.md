@@ -76,6 +76,9 @@ Each leg then tests what it built, on that OS:
    Every report must exist, `summary.json` must have no errors and each of Betterleaks,
    Opengrep, Trivy IaC and Trivy dependencies must have findings. `python`, `python3` and
    `py` on the executable's PATH are traps: the test fails if the executable starts one.
+   Then `report --help`, and `report --from-data` renders the security assessment report of a
+   small saved product (HTML only, no network and no browser), which proves that the report
+   generator is in the bundle.
 3. Windows only: the same assertions again in PowerShell.
 4. The unit tests of `cli/` with the runner's Python (`python -m unittest`), also when the
    smoke test failed, so that Windows path handling gets real coverage.
@@ -124,6 +127,11 @@ module path and the interpreter in UTF-8 mode (`X utf8` in the spec) - the equiv
 `python3 -I -X utf8 <script>`. The child process reuses the parent's unpacked directory, so a
 helper call costs no second unpacking. `tests/test_frozen.py` runs a whole scan as a pretend
 executable and asserts that no process it starts is Python.
+
+**The report generator.** `tdxguard report` imports `tdxguard/assessment/compliance_report.py`,
+a byte-identical copy of `ci-templates/compliance-report.py`, as an ordinary module (it is in
+the spec's `hiddenimports` as well); it runs in-process, so it needs no helper command. The
+PDF is printed by a browser already installed on the machine, never by one in the bundle.
 
 **TLS.** The bundled OpenSSL looks for CA certificates where the build machine keeps them
 (`/etc/pki/tls` for AlmaLinux, the python.org prefix on macOS). Frozen, the tool therefore

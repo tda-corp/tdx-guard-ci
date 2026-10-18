@@ -10,6 +10,7 @@ tdxguard login        # sign in with TDxSSO in the browser
 tdxguard init         # write .tdxguard.yml and the CI workflow for this repository
 tdxguard doctor       # what CI scans, what is missing, what TDxGuard received
 tdxguard scan         # scan, upload to TDxGuard, check the gate
+tdxguard report       # the security assessment report, as HTML and PDF
 ```
 
 ## Install
@@ -302,6 +303,68 @@ gate in TDxGuard. After an upload the tool prints that gate's result. The result
 default branch, not the `local/...` branch you just uploaded. The local gate also counts IaC
 misconfigurations and image secrets, so it can be stricter than CI.
 
+## Report
+
+`tdxguard report` writes the security assessment report of a product: the executive summary,
+scope and methodology, the standards mapping (ISO/IEC 27001, NIST SSDF, OWASP Top 10), the
+findings by kind, the decisions and the control mapping. It is the same document CI writes with
+`ci-templates/compliance-report.py` (the CLI carries a byte-identical copy of that generator), in
+Vietnamese or English.
+
+```
+tdxguard report                                          # project of .tdxguard.yml, default branch, Vietnamese
+tdxguard report --lang en --branch develop --out report  # report.html and report.pdf
+tdxguard report --product tdx-scribe --open              # opens the PDF when it is written
+```
+
+```
+$ tdxguard report --product tdx-scribe
+> Fetching the findings of tdx-scribe (the default branch) from https://guard.tdadevelop.com
+  This takes 10 to 60 seconds on a large product.
+    0.8 s  observations (active)
+    6.8 s  observations (decided)
+   10.6 s  vulnerability checks
+   10.8 s  observation logs
+  ok Fetched 6437 open and 4240 decided observations of branch main in 25 requests (12.3 s).
+> Writing the report (vi)
+  6437 open observations, 1259 findings, verdict: action required
+  ok Wrote tdx-scribe-security-report-vi.html
+> Printing to PDF with Google Chrome
+  ok Wrote tdx-scribe-security-report-vi.pdf (29 pages, 1.3 s)
+```
+
+It uses the login of `tdxguard login` (or `TDXGUARD_TOKEN`), and the API applies your
+permissions: you get the report of a product you are a member of.
+
+**The PDF** is printed by a Chromium-based browser that is already installed, headless and with
+a profile of its own (an open browser window is not touched); nothing is downloaded. The report's
+print CSS sets A4 and the page numbers. The browser is looked up in this order:
+
+| System | Where |
+|---|---|
+| all | `TDXGUARD_BROWSER` (a path, or a program on PATH) |
+| macOS | Google Chrome, Microsoft Edge, Chromium, Brave in `/Applications` or `~/Applications`; then `chromium`, `google-chrome` on PATH |
+| Windows | `chrome.exe`, `msedge.exe`, Chromium, Brave under `%ProgramFiles%`, `%ProgramFiles(x86)%`, `%LocalAppData%`; then `chrome`, `msedge` on PATH (Edge is part of Windows 10 and 11) |
+| Linux | `google-chrome`, `google-chrome-stable`, `chromium`, `chromium-browser`, `microsoft-edge`, `microsoft-edge-stable`, `brave-browser` on PATH |
+
+Without a browser the tool writes the HTML and says so (exit code 0): open it and print it to
+PDF (A4, without headers and footers), or pass `--open`. When the browser fails or takes more
+than three minutes, the HTML stays and the command exits with 2. As root on Linux (containers)
+the browser runs with `--no-sandbox`. The snap package of Chromium cannot write outside your
+home directory: write the report there, or set `TDXGUARD_BROWSER` to another browser.
+
+| Option | |
+|---|---|
+| `--product NAME` | default: `project` of `.tdxguard.yml`, or the product of the CI workflow |
+| `--branch NAME` / `--all-branches` | default: the product's default branch |
+| `--lang vi\|en` | default `vi` |
+| `--out PATH` | file name without extension (`.html`/`.pdf` are ignored), or a directory; default `<product>-security-report-<lang>` |
+| `--open` | open the PDF, or the HTML without a PDF |
+| `--no-pdf`, `--markdown`, `--csv` | HTML only; also `<out>.md`; also every finding as `<out>.csv` |
+| `--period-days 7\|30\|90\|365` | reporting period of the changes and the trend (default 30) |
+| `--prepared-for`, `--prepared-by`, `--classification` | cover page and page footer |
+| `--save-data FILE`, `--from-data FILE` | save the fetched data as JSON; render it again later without the network (another language, for example) |
+
 ## Engines: Docker or native
 
 | Engine | Where the scanners run | Needs |
@@ -368,6 +431,7 @@ OpenBao and need no stored secret.
 | `TDXGUARD_DOCKER_SOCKET` | the Docker socket as the Docker daemon sees it (see below) |
 | `TDXGUARD_OIDC_AUTHORITY`, `TDXGUARD_OIDC_CLIENT_ID` | override the server's OIDC settings for `login` |
 | `TDXGUARD_CA_BUNDLE` (or `SSL_CERT_FILE`) | a CA bundle for TLS-intercepting proxies |
+| `TDXGUARD_BROWSER` | the browser that prints `tdxguard report` to PDF |
 | `XDG_CONFIG_HOME`, `XDG_CACHE_HOME` | where credentials and caches live |
 | `NO_COLOR` / `FORCE_COLOR` | colours; by default they are used only on a terminal |
 
@@ -423,4 +487,7 @@ uvx ruff check . && uvx black --check .
 The tests use no network and no Docker. `tests/test_counts.py` also runs the jq filters of
 `ci-templates/tdxguard-lib.sh` against the Python counts when `jq` is installed (it is skipped
 otherwise; the tool itself never needs jq). `tests/test_helpers_in_sync.py` checks that the CI
-templates embed exactly `tdxguard/engine/helpers/*.py`.
+templates embed exactly `tdxguard/engine/helpers/*.py`, and `tests/test_assessment.py` that
+`tdxguard/assessment/compliance_report.py` is identical to `ci-templates/compliance-report.py`
+(after changing the script, copy it: `cp ci-templates/compliance-report.py
+cli/tdxguard/assessment/compliance_report.py`).

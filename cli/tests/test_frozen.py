@@ -143,6 +143,15 @@ class TestFrozenScanSpawnsNoPython(EngineTestCase):
         self.assertIn(["__helper", "sarif-enrich"], helper_calls)
 
 
+class TestSpec(unittest.TestCase):
+    def test_report_generator_is_bundled(self):
+        """`tdxguard report` needs the vendored generator inside the executable."""
+        spec = (CLI_ROOT / "packaging" / "tdxguard.spec").read_text(encoding="utf-8")
+        self.assertIn('"tdxguard.assessment.compliance_report"', spec)
+        pyproject = (CLI_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        self.assertIn('"tdxguard.assessment"', pyproject)
+
+
 class TestSslContext(unittest.TestCase):
     def test_package_keeps_urllibs_default(self):
         self.assertIsNone(frozen.ssl_context())
