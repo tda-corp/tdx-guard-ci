@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess  # nosec B404
 import sys
@@ -35,11 +36,112 @@ from tdxguard.engine.tools import MARKER, RULE_LANGUAGES, Toolset
 SCANNERS = ("betterleaks", "opengrep", "trivy", "image")
 SECRETS_MODES = ("dir", "git")
 
+# Third-party code a dependency manager checked out into the repository: npm, Bower,
+# Composer/Go/Bundler, CocoaPods, Carthage. Its sample keys and test fixtures are the
+# vendor's, not the product's: on an iOS app with Carthage/Checkouts committed, 47 of its 48
+# secret findings were there. So were all 33 of its dependency findings: Trivy read the
+# Gemfile.lock of each library's own build tooling. The product's dependencies are declared
+# by the lockfiles at its root (Podfile.lock, package-lock.json, composer.lock), which Trivy
+# still reads.
+VENDORED_DIRS = ("node_modules", "bower_components", "vendor", "Pods", "Carthage")
+# Betterleaks 1.8.1 has no path exclusion flag. A repository without a config of its own gets
+# the default rules plus this allowlist; one with a .gitleaks.toml or .betterleaks.toml
+# decides for itself. Both CI templates carry the same text (a test fails when they differ).
+#
+# Lockfiles hold package names, versions and checksums, and the generic-api-key rule takes a
+# CocoaPods checksum for a key (one per Podfile.lock). Only that rule is muted there: a
+# credential in a registry URL is still found by the rules that look for one.
+LOCKFILES_PATTERN = (
+    r"(?:^|/)(?:Podfile\.lock|pubspec\.lock|Package\.resolved|Cargo\.lock|go\.sum|composer\.lock|Gemfile\.lock"
+    r"|gradle\.lockfile|package-lock\.json|yarn\.lock|pnpm-lock\.yaml|poetry\.lock|Pipfile\.lock|packages\.lock\.json)$"
+)
+BETTERLEAKS_DEFAULT_CONFIG = f"""[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Vendored third-party code"
+paths = ['''(?:^|/)(?:{"|".join(VENDORED_DIRS)})/''']
+
+[[allowlists]]
+description = "Lockfiles: checksums, not keys"
+targetRules = ["generic-api-key"]
+paths = ['''{LOCKFILES_PATTERN}''']
+"""
+
+# A Google API key in a Firebase app's config file is the app's client key: it ships inside
+# every copy of the app by design, so finding it in the repository is no leak. What protects
+# it is its restrictions in the Google Cloud console. Reported, but not severe: the backend
+# imports it as Low, and neither the local gate nor the CI templates count it. The templates
+# carry the same pattern (a test fails when they differ).
+FIREBASE_KEY_RULE = "gcp-api-key"
+FIREBASE_CONFIG_PATTERN = r"(?:^|/)(?:google-services\.json|GoogleService-Info\.plist|firebase_options[^/]*\.dart)$"
+
+
+def is_firebase_client_key(finding: Any) -> bool:
+    """A Betterleaks finding that is a Firebase app's client key (see FIREBASE_CONFIG_PATTERN)."""
+    return (
+        isinstance(finding, dict)
+        and finding.get("RuleID") == FIREBASE_KEY_RULE
+        and bool(re.search(FIREBASE_CONFIG_PATTERN, str(finding.get("File") or "")))
+    )
+
+
+def _betterleaks_severe(document: Any) -> int:
+    """The templates' SECRETS_SEVERE: every finding but a Firebase app's client key."""
+    return sum(1 for finding in document or [] if not is_firebase_client_key(finding))
+
+
+# Opengrep rule directories left out although they are security/ ones. generic/secrets
+# reported every secret a second time next to Betterleaks (20 of 21 SAST findings on a
+# Flutter app were its Firebase keys again): secrets are Betterleaks' job.
+OPENGREP_SKIPPED_RULES = ("generic/secrets",)
+
+
+def _regex_literal(text: str) -> str:
+    """text as a Go (RE2) regular expression matching itself."""
+    return "".join("\\" + c if c in "\\.+*?()|[]{}^$" else c for c in text)
+
+
+def _glob_literal(text: str) -> str:
+    """text as a Trivy (doublestar) pattern matching itself."""
+    return "".join("\\" + c if c in "\\*?[]{}" else c for c in text)
+
+
+def outside_repository(src: Path) -> List[str]:
+    """
+    What the working tree holds that is not part of the repository: the files and
+    directories git ignores (a directory as "dir/"), and nested repositories such as a
+    worktree checked out inside it. Empty outside a git repository.
+
+    CI checks out only the repository; a developer's copy also holds build output, caches
+    and worktrees. One had 13 GB of Rust build output and six worktrees: scanned, every
+    secret and every lockfile in them came back once per copy. Opengrep already follows
+    git; Betterleaks' dir mode and Trivy fs do not.
+    """
+
+    def listed(*options: str) -> List[str]:
+        try:
+            output = subprocess.run(  # nosec B603 B607
+                ["git", "-c", "safe.directory=*", "ls-files", "-z", "--others", "--exclude-standard", *options],
+                cwd=str(src),
+                capture_output=True,
+                check=True,
+                timeout=120,
+            ).stdout
+        except (OSError, subprocess.SubprocessError):
+            return []
+        return [p for p in output.decode("utf-8", errors="replace").split("\0") if p]
+
+    ignored = listed("--ignored", "--directory")
+    # Without --directory, git lists untracked files one by one and a nested repository as "dir/".
+    nested = [p for p in listed() if p.endswith("/")]
+    return sorted(set(ignored + nested))
+
+
 # The CI template's exclusions.
 OPENGREP_EXCLUDES = (
-    "node_modules",
+    *VENDORED_DIRS,
     ".venv",
-    "vendor",
     "dist",
     "build",
     "*.md",
@@ -47,7 +149,9 @@ OPENGREP_EXCLUDES = (
     "ogrules",
     "ogrules-security",
 )
-TRIVY_SKIP_DIRS = ("node_modules", ".venv", "vendor")
+# A plain name only matches at the repository root; **/ matches at any depth (ios/Pods in a
+# Flutter app).
+TRIVY_SKIP_DIRS = (*(f"**/{directory}" for directory in VENDORED_DIRS), ".venv")
 OPENGREP_RULE_ROOTS = ",".join(RULE_LANGUAGES)
 
 SUMMARY_FILE = "summary.json"
@@ -110,6 +214,7 @@ class Scan:
         self.errors: List[str] = []
         self.warnings: List[str] = []
         self.work = Path(".")
+        self.outside: List[str] = []
 
     # --- bookkeeping ---
 
@@ -193,9 +298,30 @@ class Scan:
         report = "betterleaks.json"
         self.remove(report)
         config: List[str] = []
-        # The repository's own config, exactly as CI picks it up.
-        if (self.options.src / ".gitleaks.toml").is_file():
-            config = ["-c", ".gitleaks.toml"]
+        # The repository's own config, exactly as CI picks it up. Betterleaks finds a
+        # .betterleaks.toml by itself; -c would override it.
+        own = next(
+            (name for name in (".gitleaks.toml", ".betterleaks.toml") if (self.options.src / name).is_file()), None
+        )
+        text = None if own else BETTERLEAKS_DEFAULT_CONFIG
+        if own == ".gitleaks.toml":
+            config = ["-c", own]
+        # The working tree, unlike the history, holds what git ignores: left out, the
+        # repository's own config extended rather than replaced.
+        outside = self.outside if self.options.secrets_mode == "dir" else []
+        if outside:
+            text = (f"[extend]\npath = {json.dumps(str((self.options.src / own).resolve()))}\n" if own else text) + (
+                '\n[[allowlists]]\ndescription = "Not in the repository: ignored by git, or another repository"\n'
+                "paths = [\n"
+                + "".join(
+                    f"  {json.dumps('^' + _regex_literal(p) + ('' if p.endswith('/') else '$'))},\n" for p in outside
+                )
+                + "]\n"
+            )
+        if text is not None:
+            generated = self.work / "betterleaks.toml"
+            generated.write_text(text, encoding="utf-8")
+            config = ["-c", str(generated)]
         if self.options.secrets_mode == "git":
             if self.run_quiet(["git", "rev-parse", "--is-inside-work-tree"]) != 0:
                 self.error(
@@ -218,7 +344,7 @@ class Scan:
         elif not _valid_json(self.report(report)):
             # A clean scan writes [] or null, both valid JSON; no file at all is a failure.
             self.error("betterleaks wrote no valid betterleaks.json")
-        self.row("betterleaks", "Betterleaks (secrets)", report, counts.length, counts.length)
+        self.row("betterleaks", "Betterleaks (secrets)", report, counts.length, _betterleaks_severe)
 
     def opengrep(self) -> None:
         """
@@ -234,6 +360,8 @@ class Scan:
         except OSError:
             self.error(f"opengrep: cannot copy the rules into {self.work}")
             return
+        for skipped in OPENGREP_SKIPPED_RULES:
+            shutil.rmtree(str(rules / skipped), ignore_errors=True)
         # CI ignores its own rule trees (ogrules, ogrules-security) inside the checkout; the
         # same names are passed so a repository that happens to hold such a directory
         # behaves alike.
@@ -277,6 +405,8 @@ class Scan:
         # so it goes to both. A pattern that matches nothing is harmless.
         for pattern in self.options.excludes:
             skip += ["--skip-dirs", pattern, "--skip-files", pattern]
+        for path in self.outside:
+            skip += ["--skip-dirs" if path.endswith("/") else "--skip-files", _glob_literal(path.rstrip("/"))]
         self.remove("trivy.sarif", "sbom.cdx.json")
 
         self.log("==> trivy fs (misconfig)")
@@ -361,7 +491,12 @@ class Scan:
         started_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         start = time.monotonic()
         self.work = make_work_dir(self.work_root)
+        self.outside = outside_repository(options.src)
         try:
+            if self.outside:
+                self.log(
+                    f"==> leaving out {len(self.outside)} path(s) git ignores or that belong to another repository"
+                )
             self.log(
                 f"==> tdxguard {options.engine} engine {options.version}: scanning {options.src} into {options.out}"
             )

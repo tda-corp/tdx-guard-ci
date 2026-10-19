@@ -35,6 +35,7 @@ from tdxguard import (
 )
 from tdxguard.assessment import browser as report_browser
 from tdxguard.engine import scan, tools
+from tdxguard.engine.helpers import mobsf_scan
 from tdxguard.errors import (
     EXIT_ERROR,
     EXIT_GATE,
@@ -48,6 +49,8 @@ from tdxguard.errors import (
     NetworkError,
 )
 from tdxguard.ui import UI
+
+MOBSF_IMAGE = mobsf_scan.MOBSF_IMAGE
 
 # --- login / logout / whoami ---
 
@@ -210,6 +213,7 @@ def cmd_init(args: argparse.Namespace, ui: UI) -> int:
     repository, repository_name = gitinfo.parse_remote(remote) if remote else ("", "")
     project = args.project or config.product_name_from_repository(repository_name or root.name)
     dockerfiles = config.find_dockerfiles(root)
+    mobile_platforms = coverage.inspect(root).mobile_platforms
 
     # Validate the flags before anything is written.
     options = _ci_options_from_flags(args)
@@ -217,7 +221,7 @@ def cmd_init(args: argparse.Namespace, ui: UI) -> int:
     if path.exists() and not args.force:
         ui.info(f"{path} exists, kept as it is (--force overwrites it).")
     else:
-        path.write_text(config.render(project, repository or None, dockerfiles), encoding="utf-8")
+        path.write_text(config.render(project, repository or None, dockerfiles, mobile_platforms), encoding="utf-8")
         ui.success(f"Wrote {path}")
         ui.info(f"project: {project}" + ("" if args.project else "  (from the repository name; edit if it differs)"))
         if repository:
@@ -252,6 +256,8 @@ def _ci_options_from_flags(args: argparse.Namespace) -> coverage.CIOptions:
         app_start_command=coverage.check_command(args.start_command or "", "--start-command"),
         app_health_url=coverage.check_url(args.health_url or "", "--health-url"),
         dast_target=coverage.check_url(args.dast_target or "", "--dast-target"),
+        mobile_apps=[coverage.check_mobile_app(a) for a in (getattr(args, "mobile_app", None) or [])],
+        mobile_sources=[coverage.check_mobile_source(s) for s in (getattr(args, "mobile_source", None) or [])],
     )
 
 
@@ -329,6 +335,19 @@ def _complete_options_interactively(
             else "URL of a deployed test or staging environment for ZAP"
         )
         options.dast_target = _ask_until_valid(ui, question, lambda v: coverage.check_url(v, "The URL"))
+    if facts.mobile_platforms and platform == coverage.GITHUB and not (options.mobile_apps or options.mobile_sources):
+        ui.info(f"Mobile app ({', '.join(facts.mobile_platforms)}): MobSF analyses the built app best.")
+        app = _ask_until_valid(
+            ui,
+            "Path of the built .apk/.aab/.ipa in CI (a glob is fine)",
+            lambda v: coverage.check_mobile_app(v) if v else "",
+        )
+        if app:
+            options.mobile_apps = [app]
+        else:
+            for line in coverage.mobile_suggestions(facts)[:2]:
+                if _ask_yes(ui, f"Analyse the source instead, mobile_source: {line}?"):
+                    options.mobile_sources.append(line)
 
 
 def _init_ci(
@@ -390,8 +409,10 @@ def _init_ci(
     target.write_text(content, encoding="utf-8")
     ui.success(f"Wrote {target}")
     kinds = coverage.configured_kinds(coverage.Workflow(platform, str(target), _plain_inputs(suggested)))
-    covered = [label for kind, label in coverage.KINDS if kinds.get(kind)]
-    ui.info(f"CI covers {len(covered)} of {len(coverage.KINDS)} kinds of scan: {', '.join(covered)}")
+    # The mobile app analysis counts only for a repository with a mobile app in it.
+    applicable = [(k, label) for k, label in coverage.KINDS if k != "mobile" or facts.mobile_platforms or kinds.get(k)]
+    covered = [label for kind, label in applicable if kinds.get(kind)]
+    ui.info(f"CI covers {len(covered)} of {len(applicable)} kinds of scan: {', '.join(covered)}")
     ui.info("`tdxguard doctor` shows what is missing and what TDxGuard has received.")
 
 
@@ -433,21 +454,30 @@ def cmd_doctor(args: argparse.Namespace, ui: UI) -> int:
     ui.step(f"Scan coverage of {project}")
     ui.info(f"Workflow: {workflow.path} ({platform})" if workflow else f"Workflow: none found ({platform})")
     ui.info(f"TDxGuard: {_server_state_text(state)}")
+    if facts.truncated:
+        ui.warn(
+            f"Only the first {coverage.MAX_FILES} of {facts.truncated} files were inspected: what is in the rest "
+            "is missing below."
+        )
     ui.out("")
     ui.table(
         ["Kind", "Expected", "Why", "In CI", "Received", "What to do"],
         [[r.label, r.expected, r.why[:40], "yes" if r.configured else "no", r.received, r.action or "-"] for r in rows],
     )
-    details = [r for r in rows if r.detail]
+    # The no-workflow sentence is said once, not on every row.
+    details = [(r.label, [x for x in r.detail.splitlines() if x != coverage.NO_WORKFLOW]) for r in rows]
+    details = [(label, lines) for label, lines in details if lines]
     if workflow is None:
         ui.out("")
         ui.info("No TDxGuard workflow found: nothing is scanned in CI. `tdxguard init` writes one.")
-    elif details:
+    if details:
         ui.out("")
-        for row in details:
-            first, *rest = row.detail.splitlines()
-            ui.info(f"{row.label}: {first}" if not rest else f"{row.label}: add to the workflow")
-            for line in [first] + rest if rest else []:
+        for label, lines in details:
+            if len(lines) == 1:
+                ui.info(f"{label}: {lines[0]}")
+                continue
+            ui.info(f"{label}:")
+            for line in lines:
                 ui.info("    " + line)
     ui.out("")
     if ok:
@@ -512,10 +542,21 @@ def branch_name(username: str, git_branch: str) -> str:
     return f"local/{user}/{branch}"
 
 
+def imports_licenses(branch: str, sbom: bool) -> bool:
+    """
+    Whether the upload imports the components and licenses of the SBOM, not only its
+    vulnerabilities. Not for a local/ branch unless --sbom: a local scan is a throwaway copy
+    of the project that the branch housekeeping deletes after a few days, and the copies of
+    every component on such branches are what made the database grow. A --branch outside
+    local/ gets them.
+    """
+    return sbom or not branch.startswith("local/")
+
+
 def resolve_skips(args: argparse.Namespace) -> List[str]:
     skips = list(dict.fromkeys(args.skip or []))
     if args.image_only:
-        skips = ["betterleaks", "opengrep", "trivy"]
+        skips = ["betterleaks", "opengrep", "trivy", "mobile"]
     if args.no_images and "image" not in skips:
         skips.append("image")
     return skips
@@ -555,6 +596,10 @@ def _prepare_out_dir(keep: Optional[str], project: str) -> Path:
     if keep:
         out = Path(keep).expanduser().resolve()
         out.mkdir(parents=True, exist_ok=True)
+        # The reports of an earlier run, of a scanner skipped now or an image or app no longer
+        # scanned, would go up again with this run's; the directory's other files stay.
+        for path in reports.report_files(out):
+            path.unlink()
         return out
     out = cache_dir() / "reports" / re.sub(r"[^A-Za-z0-9._-]", "-", project)
     if out.exists():
@@ -685,7 +730,7 @@ def cmd_scan(args: argparse.Namespace, ui: UI) -> int:  # noqa: C901
             excludes=excludes,
             images=images,
             remote_images=remote_images,
-            skips=skips,
+            skips=[s for s in skips if s != "mobile"],
             secrets_mode=args.secrets_mode,
             log_opts=args.log_opts,
         )
@@ -694,7 +739,8 @@ def cmd_scan(args: argparse.Namespace, ui: UI) -> int:  # noqa: C901
         missing_hint = f"Run with -v to see its output. Is {scanner_image} available (docker pull {scanner_image})?"
     else:
         assert toolset is not None  # nosec B101
-        code, tail = _run_native(args, toolset, root, out, excludes, images, remote_images, skips, trivy_cache)
+        engine_skips = [s for s in skips if s != "mobile"]
+        code, tail = _run_native(args, toolset, root, out, excludes, images, remote_images, engine_skips, trivy_cache)
         missing_hint = "Run with -v to see the scanners' output."
 
     summary = reports.load_summary(out)
@@ -707,6 +753,10 @@ def cmd_scan(args: argparse.Namespace, ui: UI) -> int:  # noqa: C901
     if code != 0 and not scanner_errors:
         scanner_errors.append(f"the scanner exited with {code}")
 
+    # 2b. The mobile app, with MobSF in Docker whatever the engine.
+    if cfg.mobile and "mobile" not in skips:
+        scanner_errors += _scan_mobile(ui, cfg, root, out, summary, docker_available)
+
     # 3. Summary.
     counts = reports.count(out, ignore_unfixed=cfg.ignore_unfixed)
     _print_summary(ui, summary, out, scanner_errors, engine)
@@ -716,7 +766,9 @@ def cmd_scan(args: argparse.Namespace, ui: UI) -> int:  # noqa: C901
     upload_failed = False
     if not args.no_upload and client and creds:
         branch = args.branch or branch_name(username, gitinfo.current_branch(root))
-        upload_result, upload_failed = _upload(ui, client, creds, cfg, root, out, image_refs, branch)
+        upload_result, upload_failed = _upload(
+            ui, client, creds, cfg, root, out, image_refs, branch, imports_licenses(branch, args.sbom)
+        )
 
     # 5. Gate.
     gate = reports.evaluate_gate(cfg.gate, counts)
@@ -753,6 +805,40 @@ def cmd_scan(args: argparse.Namespace, ui: UI) -> int:  # noqa: C901
         }
         print(json.dumps(document, indent=2))
     return exit_code
+
+
+def _scan_mobile(
+    ui: UI, cfg: config.Config, root: Path, out: Path, summary: Dict[str, Any], docker_available: Callable[[], bool]
+) -> List[str]:
+    """MobSF on the apps of `mobile:` in .tdxguard.yml; its rows join the scanners' summary."""
+    if not docker_available():
+        message = (
+            f"MobSF runs in Docker, which is not available here: the mobile app (mobile: in {config.CONFIG_FILE}) "
+            "is not analysed. Start Docker, or skip it with --skip mobile."
+        )
+        ui.warn(message)
+        summary.setdefault("warnings", []).append(message)
+        return []
+    ui.step("Analysing the mobile app with MobSF (in Docker, without network access)")
+    apps = [entry.app for entry in cfg.mobile if entry.app]
+    sources = [entry.argument for entry in cfg.mobile if entry.source]
+    try:
+        rows = mobsf_scan.scan(root, out, apps, sources, image=os.environ.get("TDXGUARD_MOBSF_IMAGE") or MOBSF_IMAGE,
+                               log=ui.info)  # fmt: skip
+    except mobsf_scan.MobSFError as e:
+        return [f"MobSF: {e}"]
+    errors = []
+    for row in rows:
+        if row.get("error"):
+            errors.append(f"MobSF: {row['error']}")
+            continue
+        if row.get("warning"):
+            # Already in the log; the summary keeps it for the report
+            summary.setdefault("warnings", []).append(f"MobSF: {row['warning']}")
+        summary.setdefault("rows", []).append(
+            {"label": row["label"], "findings": row.get("findings", "-"), "severe": row.get("severe", "-")}
+        )
+    return errors
 
 
 def _native_tools(ui: UI) -> tools.Toolset:
@@ -862,6 +948,7 @@ def _upload(
     out: Path,
     image_refs: Dict[str, str],
     branch: str,
+    licenses: bool,
 ) -> Tuple[Dict[str, Any], bool]:
     ui.out("")
     ui.step(f"Uploading to {creds.server}")
@@ -884,9 +971,11 @@ def _upload(
 
     failed = 0
     uploaded = []
+    if not licenses:
+        ui.info("The components and licenses of the SBOM are not imported for a local scan (--sbom imports them).")
     for item in reports.upload_plan(out, image_refs):
         try:
-            result = client.upload(str(item.path), item.fields(cfg.project, branch))
+            result = client.upload(str(item.path), item.fields(cfg.project, branch, licenses=licenses))
             uploaded.append({"report": item.path.name, "parser": item.parser, **(result or {})})
             new = (result or {}).get("observations_new", 0)
             resolved = (result or {}).get("observations_resolved", 0)

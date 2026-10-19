@@ -5,21 +5,27 @@ from __future__ import annotations
 import fnmatch
 import os
 import re
+import subprocess  # nosec B404
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import yaml
 
+from tdxguard.engine.scan import VENDORED_DIRS
 from tdxguard.errors import ConfigError
 
 CONFIG_FILE = ".tdxguard.yml"
-TOP_LEVEL_KEYS = ("project", "repository", "engine", "exclude", "images", "gate")
+TOP_LEVEL_KEYS = ("project", "repository", "engine", "exclude", "images", "mobile", "gate")
 IMAGE_KEYS = ("dockerfile", "context", "name", "ref")
+MOBILE_KEYS = ("app", "source", "path")
+MOBILE_PLATFORMS = ("android", "ios")
 ENGINES = ("auto", "docker", "native")
 GATE_KEYS = ("critical", "high", "ignore_unfixed")
 SLUG_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
-SKIPPED_DIRECTORIES = {"node_modules", ".git", "vendor"}
+# The scanners leave the vendored directories out (VENDORED_DIRS); a Dockerfile or a
+# Package.swift found there belongs to a third-party library, not to the product.
+SKIPPED_DIRECTORIES = {".git", *VENDORED_DIRS}
 
 
 @dataclass
@@ -41,11 +47,26 @@ class Image:
 
 
 @dataclass
+class MobileApp:
+    """A mobile app MobSF analyses: a built app (`app`, a path or a glob) or a project's source."""
+
+    app: Optional[str] = None
+    source: Optional[str] = None  # android or ios
+    path: str = "."  # the project directory of a source
+
+    @property
+    def argument(self) -> str:
+        """The helper's argument: --app <app> or --source <platform>:<path>."""
+        return self.app if self.app else f"{self.source}:{self.path}"
+
+
+@dataclass
 class Config:
     project: str
     repository: Optional[str] = None
     exclude: List[str] = field(default_factory=list)
     images: List[Image] = field(default_factory=list)
+    mobile: List[MobileApp] = field(default_factory=list)
     gate: Dict[str, Optional[int]] = field(default_factory=dict)
     engine: Optional[str] = None  # auto, docker or native; None: not set in the file
     # Count only vulnerabilities with a fixed version, like CI's `trivy --ignore-unfixed`.
@@ -130,6 +151,7 @@ def parse(data: Any, root: Optional[Path] = None) -> Config:
 
     exclude = _parse_exclude(data.get("exclude"))
     images = _parse_images(data.get("images"), root)
+    mobile = _parse_mobile(data.get("mobile"))
     gate, ignore_unfixed = _parse_gate(data.get("gate"))
 
     return Config(
@@ -137,6 +159,7 @@ def parse(data: Any, root: Optional[Path] = None) -> Config:
         repository=repository.strip() if isinstance(repository, str) else None,
         exclude=exclude,
         images=images,
+        mobile=mobile,
         gate=gate,
         engine=engine,
         ignore_unfixed=ignore_unfixed,
@@ -206,6 +229,37 @@ def _parse_images(value: Any, root: Optional[Path]) -> List[Image]:
     return images
 
 
+def _parse_mobile(value: Any) -> List[MobileApp]:
+    """`mobile:` a list of `- app: <path or glob>` and `- source: android|ios` (with `path:`)."""
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ConfigError(f"{_where('mobile')}: must be a list of entries with an app or a source key")
+    apps: List[MobileApp] = []
+    for i, entry in enumerate(value):
+        where = f"mobile[{i}]"
+        if not isinstance(entry, dict):
+            raise ConfigError(f"{_where(where)}: must be a mapping with an app or a source key")
+        unknown = [str(k) for k in entry if k not in MOBILE_KEYS]
+        if unknown:
+            raise ConfigError(f"{_where(where + '.' + unknown[0])}: unknown key", f"Allowed: {', '.join(MOBILE_KEYS)}.")
+        if ("app" in entry) == ("source" in entry):
+            raise ConfigError(
+                f"{_where(where)}: give either app (a built .apk, .aab or .ipa) or source (android or ios)"
+            )
+        if "app" in entry:
+            if "path" in entry:
+                raise ConfigError(f"{_where(where + '.path')}: belongs to a source; an app entry is the path itself")
+            apps.append(MobileApp(app=_check_relative_path(entry["app"], f"{where}.app")))
+            continue
+        platform = entry["source"]
+        if platform not in MOBILE_PLATFORMS:
+            raise ConfigError(f"{_where(where + '.source')}: must be android or ios, not {platform!r}")
+        path = _check_relative_path(entry["path"], f"{where}.path") if entry.get("path") is not None else "."
+        apps.append(MobileApp(source=platform, path=path))
+    return apps
+
+
 def _parse_remote_image(entry: Dict[Any, Any], where: str) -> Image:
     """`- ref: ghcr.io/org/app:tag` (name optional): scanned from the registry, nothing is built."""
     for key in ("dockerfile", "context"):
@@ -267,19 +321,48 @@ def load(root: Path) -> Config:
 # --- tdxguard init ---
 
 
-def find_dockerfiles(root: Path) -> List[str]:
-    """Dockerfile, *.Dockerfile and Dockerfile.*, outside node_modules, .git and vendor."""
+def _git_files(root: Path) -> Optional[List[str]]:
+    """The files git knows below root (tracked, and untracked but not ignored); None outside a git repository."""
+    try:
+        listed = subprocess.run(  # nosec B603 B607
+            ["git", "-C", str(root), "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+            capture_output=True,
+            check=True,
+            timeout=60,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    # A nested repository or worktree is listed as "dir/"; a tracked file deleted from the
+    # working tree is still in the index.
+    paths = (p for p in listed.decode("utf-8", errors="replace").split("\0") if p and not p.endswith("/"))
+    return [p for p in paths if (root / p).is_file()]
+
+
+def repository_files(root: Path) -> List[str]:
+    """
+    The repository's files, relative with forward slashes, sorted, outside SKIPPED_DIRECTORIES.
+
+    In a git repository these are the files git knows: what CI checks out, not the ignored
+    build output, caches and nested worktrees a developer's copy also holds. One such copy
+    had 13 GB of Rust build output and six worktrees, and a plain walk of it never reached
+    the mobile app.
+    """
+    files = _git_files(root)
+    if files is None:
+        files = []
+        for directory, subdirectories, names in os.walk(root):
+            subdirectories[:] = [d for d in subdirectories if d not in SKIPPED_DIRECTORIES]
+            files += [os.path.relpath(os.path.join(directory, name), root).replace(os.sep, "/") for name in names]
+    return sorted(p for p in files if not SKIPPED_DIRECTORIES.intersection(p.split("/")[:-1]))
+
+
+def find_dockerfiles(root: Path, files: Optional[List[str]] = None) -> List[str]:
+    """Dockerfile, *.Dockerfile and Dockerfile.*, outside .git and the vendored directories."""
     found = []
-    for directory, subdirectories, files in os.walk(root):
-        subdirectories[:] = sorted(d for d in subdirectories if d not in SKIPPED_DIRECTORIES)
-        for name in sorted(files):
-            lower = name.lower()
-            if (
-                lower == "dockerfile"
-                or fnmatch.fnmatch(lower, "*.dockerfile")
-                or fnmatch.fnmatch(lower, "dockerfile.*")
-            ):
-                found.append(os.path.relpath(os.path.join(directory, name), root).replace(os.sep, "/"))
+    for relative in repository_files(root) if files is None else files:
+        lower = relative.rsplit("/", 1)[-1].lower()
+        if lower == "dockerfile" or fnmatch.fnmatch(lower, "*.dockerfile") or fnmatch.fnmatch(lower, "dockerfile.*"):
+            found.append(relative)
     return sorted(found, key=lambda p: (p.count("/"), p))
 
 
@@ -289,7 +372,9 @@ def product_name_from_repository(name: str) -> str:
     return slug or "my-project"
 
 
-def render(project: str, repository: Optional[str], dockerfiles: List[str]) -> str:
+def render(
+    project: str, repository: Optional[str], dockerfiles: List[str], mobile_platforms: Sequence[str] = ()
+) -> str:
     lines = [
         "# TDxGuard configuration for `tdxguard scan`. Reference: tdxguard --help, cli/README.md",
         "",
@@ -319,6 +404,15 @@ def render(project: str, repository: Optional[str], dockerfiles: List[str]) -> s
             "images: []",
             "#  - dockerfile: Dockerfile",
             "#    context: .",
+        ]
+    if mobile_platforms:
+        lines += [
+            "",
+            f"# Mobile app ({', '.join(mobile_platforms)}): MobSF analyses it in Docker, without network access.",
+            "# The built app gives the most; the source works for the Android Studio and Xcode layouts.",
+            "mobile: []",
+            "#  - app: app/build/outputs/apk/release/app-release.apk",
+            "#  - source: android      # or ios, with path: <project directory>",
         ]
     lines += [
         "",

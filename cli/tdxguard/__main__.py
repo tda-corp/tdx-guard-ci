@@ -90,6 +90,18 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument("--start-command", metavar="CMD", help="command that starts the app in CI (IAST)")
     init.add_argument("--health-url", metavar="URL", help="URL that answers once the app is up")
     init.add_argument("--dast-target", metavar="URL", help="URL for ZAP: the started app or a test environment")
+    init.add_argument(
+        "--mobile-app",
+        action="append",
+        metavar="PATH",
+        help="the built mobile app (.apk/.aab/.ipa, a glob allowed) for MobSF in CI (repeatable; GitHub)",
+    )
+    init.add_argument(
+        "--mobile-source",
+        action="append",
+        metavar="PLATFORM[:DIR]",
+        help="android or ios[:DIR]: MobSF analyses the project's source in CI (repeatable; GitHub)",
+    )
     init.add_argument("--yes", action="store_true", help="ask nothing, use the flags and what is detected")
 
     for name, aliases in (("doctor", ["coverage"]),):
@@ -125,7 +137,17 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--no-upload", action="store_true", help="scan only; nothing is sent to TDxGuard")
     scan.add_argument("--branch", help="branch name in TDxGuard (default: local/<user>/<git branch>)")
     scan.add_argument(
-        "--skip", action="append", choices=SCANNERS, metavar="SCANNER", help=f"skip a scanner: {', '.join(SCANNERS)}"
+        "--sbom",
+        action="store_true",
+        help="also import the components and licenses of the SBOM on a local/ branch "
+        "(default: only its vulnerabilities; a --branch outside local/ always gets them)",
+    )
+    scan.add_argument(
+        "--skip",
+        action="append",
+        choices=SCANNERS + ("mobile",),
+        metavar="SCANNER",
+        help=f"skip a scanner: {', '.join(SCANNERS + ('mobile',))} (mobile: MobSF, see mobile: in .tdxguard.yml)",
     )
     images = scan.add_mutually_exclusive_group()
     images.add_argument("--image-only", action="store_true", help="scan only the images")

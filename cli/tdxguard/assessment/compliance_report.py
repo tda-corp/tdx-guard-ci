@@ -92,8 +92,12 @@ PAGE_SIZE = 1000
 
 SCA, SAST, SECRET, CONFIG, DAST, IAST, OTHER = "SCA", "SAST", "SECRET", "CONFIG", "DAST", "IAST", "OTHER"
 IMAGE = "IMAGE"  # a kind of testing (container image scan), findings land in SCA or CONFIG
-FINDING_KINDS = [SCA, SAST, SECRET, CONFIG, DAST, IAST, OTHER]
-TEST_KINDS = [SAST, SCA, IMAGE, SECRET, CONFIG, DAST, IAST]
+MOBILE = "MOBILE"  # the static analysis of a mobile app (MobSF), of the built app or of its source
+FINDING_KINDS = [SCA, SAST, SECRET, CONFIG, DAST, IAST, MOBILE, OTHER]
+TEST_KINDS = [SAST, SCA, IMAGE, SECRET, CONFIG, DAST, IAST, MOBILE]
+# Kinds that apply to some products only: a web service has no mobile app to analyse. They are
+# listed (performed, not performed, how to enable) only where they ran.
+APPLICABLE_WHEN_RUN = {MOBILE}
 
 # The dashboard's scan coverage classifies vulnerability checks with the same word lists and the
 # same order as check_kinds() below (backend/application/core/services/scan_coverage.py); a test
@@ -102,6 +106,7 @@ TEST_KINDS = [SAST, SCA, IMAGE, SECRET, CONFIG, DAST, IAST]
 _SECRET_WORDS = ("leak", "secret", "trufflehog", "detect-secrets")
 _IAST_WORDS = ("zen", "aikido", "iast")
 _DAST_WORDS = ("zap", "nuclei", "nikto", "strix", "dast")
+_MOBILE_WORDS = ("mobsf",)
 _SAST_WORDS = ("opengrep", "semgrep", "bandit", "codeql", "sonar", "eslint", "gosec", "brakeman", "spotbugs")
 _SCA_WORDS = ("dependency-check", "grype", "osv", "npm audit", "pip-audit", "snyk", "dependabot")
 _IAC_WORDS = ("trivy", "checkov", "kics", "terrascan", "kubescape", "prowler", "hadolint")
@@ -142,6 +147,8 @@ def finding_kind(observation: dict) -> str:
         return IAST
     if _contains(scanner, _DAST_WORDS) or observation.get("origin_endpoint_url"):
         return DAST
+    if _contains(scanner, _MOBILE_WORDS):
+        return MOBILE
     if (
         observation.get("vulnerability_id")
         or observation.get("origin_component_purl")
@@ -172,6 +179,8 @@ def check_kinds(check: dict, observed: Iterable[str] = ()) -> set:
         kinds.add(IAST)
     elif _contains(scanner, _DAST_WORDS):
         kinds.add(DAST)
+    elif _contains(scanner, _MOBILE_WORDS):
+        kinds.add(MOBILE)
     elif _contains(scanner, _SAST_WORDS):
         kinds.add(SAST)
     elif "sbom" in report or "cdx" in report or "cyclonedx" in report or _contains(scanner, _SCA_WORDS):
@@ -210,6 +219,7 @@ STRINGS = {
         "s_secret": "Findings: secrets",
         "s_config": "Findings: configuration and infrastructure as code",
         "s_dast": "Findings: running application (DAST/IAST)",
+        "s_mobile": "Findings: mobile app (MobSF)",
         "s_other": "Findings: other",
         "s_decisions": "Decisions and risk treatment",
         "s_controls": "Control mapping",
@@ -305,6 +315,7 @@ STRINGS = {
         "kind_CONFIG": "Configuration / IaC",
         "kind_DAST": "Running application (DAST)",
         "kind_IAST": "Instrumented runtime (IAST)",
+        "kind_MOBILE": "Mobile app (MobSF)",
         "kind_OTHER": "Other",
         "kind_IMAGE": "Container image scan",
         # How to enable a kind of testing that did not run (TDxGuard CI template inputs)
@@ -318,12 +329,15 @@ STRINGS = {
         "that its job succeeds.",
         "enable_DAST": "DAST: set zap_target: in the TDxGuard workflow (ZAP_TARGET on GitLab).",
         "enable_IAST": "IAST: set app_start_command: in the TDxGuard workflow (APP_START_COMMAND on GitLab).",
+        "enable_MOBILE": "Mobile app: set mobile_app: (the built .apk/.ipa) or mobile_source: in the TDxGuard "
+        "workflow (GitHub), or mobile: in .tdxguard.yml for tdxguard scan.",
         "short_SCA": "dependency / image package",
         "short_SAST": "source code",
         "short_SECRET": "secret",
         "short_CONFIG": "configuration",
         "short_DAST": "running application",
         "short_IAST": "instrumented runtime",
+        "short_MOBILE": "mobile app",
         "short_OTHER": "other",
         "sla": "SLA (days)",
         "overdue": "Over SLA",
@@ -354,6 +368,7 @@ STRINGS = {
         "s_secret": "Phát hiện: bí mật (secrets)",
         "s_config": "Phát hiện: cấu hình và hạ tầng dạng mã (IaC)",
         "s_dast": "Phát hiện: ứng dụng đang chạy (DAST/IAST)",
+        "s_mobile": "Phát hiện: ứng dụng di động (MobSF)",
         "s_other": "Phát hiện: khác",
         "s_decisions": "Quyết định và xử lý rủi ro",
         "s_controls": "Đối chiếu với các control",
@@ -449,6 +464,7 @@ STRINGS = {
         "kind_CONFIG": "Cấu hình / IaC",
         "kind_DAST": "Ứng dụng đang chạy (DAST)",
         "kind_IAST": "Runtime có instrument (IAST)",
+        "kind_MOBILE": "Ứng dụng di động (MobSF)",
         "kind_OTHER": "Khác",
         "kind_IMAGE": "Quét container image",
         # Cách bật một loại kiểm thử chưa chạy (tham số của CI template TDxGuard)
@@ -462,12 +478,15 @@ STRINGS = {
         "của nó thành công.",
         "enable_DAST": "DAST: đặt zap_target: trong workflow TDxGuard (ZAP_TARGET trên GitLab).",
         "enable_IAST": "IAST: đặt app_start_command: trong workflow TDxGuard (APP_START_COMMAND trên GitLab).",
+        "enable_MOBILE": "Ứng dụng di động: đặt mobile_app: (tệp .apk/.ipa đã build) hoặc mobile_source: trong "
+        "workflow TDxGuard (GitHub), hoặc mobile: trong .tdxguard.yml cho tdxguard scan.",
         "short_SCA": "thư viện / gói trong image",
         "short_SAST": "mã nguồn",
         "short_SECRET": "bí mật",
         "short_CONFIG": "cấu hình",
         "short_DAST": "ứng dụng đang chạy",
         "short_IAST": "runtime",
+        "short_MOBILE": "ứng dụng di động",
         "short_OTHER": "khác",
         "sla": "SLA (ngày)",
         "overdue": "Quá SLA",
@@ -977,7 +996,7 @@ def evaluate_controls(
 
     # A.8.29 — security testing in development and acceptance
     evidence, missing = [], []
-    dev = kinds_run & {SAST, SCA, IMAGE, SECRET, CONFIG}
+    dev = kinds_run & {SAST, SCA, IMAGE, SECRET, CONFIG, MOBILE}
     if dev:
         evidence.append("ev_dev_testing")
     if DAST in kinds_run or IAST in kinds_run:
@@ -1191,9 +1210,9 @@ STANDARD_CONTROLS = [
         ISO27001,
         "A.8.29",
         "Security testing in development and acceptance",
-        (_SAST_ONLY, _RUNTIME),
+        (frozenset({SAST, MOBILE}), _RUNTIME),
         needs_manual=True,
-        count_kinds=frozenset({SAST, DAST, IAST}),
+        count_kinds=frozenset({SAST, DAST, IAST, MOBILE}),
     ),
     # NIST SP 800-218 SSDF v1.1, the task texts
     StandardControl(
@@ -1219,8 +1238,8 @@ STANDARD_CONTROLS = [
         "Perform the code review and/or code analysis based on the organization's secure coding standards, and "
         "record and triage all discovered issues and recommended remediations in the development team's workflow "
         "or issue tracking system.",
-        (_SAST_ONLY, _SECRET_ONLY),
-        count_kinds=frozenset({SAST, SECRET}),
+        (frozenset({SAST, MOBILE}), _SECRET_ONLY),
+        count_kinds=frozenset({SAST, SECRET, MOBILE}),
     ),
     StandardControl(
         SSDF,
@@ -1229,7 +1248,7 @@ STANDARD_CONTROLS = [
         "and triaging all discovered issues and recommended remediations in the development team's workflow or "
         "issue tracking system.",
         (_RUNTIME,),
-        count_kinds=_RUNTIME,
+        count_kinds=_RUNTIME | {MOBILE},
     ),
     StandardControl(
         SSDF,
@@ -1396,6 +1415,12 @@ STANDARD_TEXT = {
         "kind_CONFIG": "IaC / configuration",
         "kind_DAST": "DAST",
         "kind_IAST": "IAST",
+        "kind_MOBILE": "Mobile app (MobSF)",
+        "mobile_note": "MobSF is static analysis of the mobile app (the built app, or its source): it counts as "
+        "code analysis (PW.7.2) and as security testing during development (A.8.29), and its findings are listed "
+        "under PW.8.2, but it is no test of the running app. OWASP MASVS is not mapped as a standard: automated "
+        "analysis evidences only a small part of it. MobSF's findings name their MASVS control in their "
+        "description.",
         # what automation leaves to people, per control
         "m_iso27001-a-5-21": "supplier selection, agreements and monitoring.",
         "m_iso27001-a-8-9": "documented baselines and change control of configurations.",
@@ -1453,6 +1478,11 @@ STANDARD_TEXT = {
         "kind_CONFIG": "IaC / cấu hình",
         "kind_DAST": "DAST",
         "kind_IAST": "IAST",
+        "kind_MOBILE": "Ứng dụng di động (MobSF)",
+        "mobile_note": "MobSF là phân tích tĩnh ứng dụng di động (bản đã build hoặc mã nguồn): được tính là phân "
+        "tích mã (PW.7.2) và kiểm thử bảo mật trong phát triển (A.8.29), các phát hiện của nó được liệt kê ở PW.8.2, "
+        "nhưng nó không phải kiểm thử ứng dụng đang chạy. OWASP MASVS không được đối chiếu như một tiêu chuẩn: phân "
+        "tích tự động chỉ chứng minh một phần nhỏ của nó. Mỗi phát hiện của MobSF ghi control MASVS trong mô tả.",
         # Vietnamese renderings of the official titles, shown under the English title
         "t_iso27001-a-5-21": "Quản lý an toàn thông tin trong chuỗi cung ứng công nghệ thông tin và truyền thông (ICT)",
         "t_iso27001-a-8-8": "Quản lý lỗ hổng kỹ thuật",
@@ -2024,6 +2054,10 @@ class Report:
     def kind_label(self, kind: str) -> str:
         return self.t(f"kind_{kind}")
 
+    def test_kinds(self) -> list:
+        """TEST_KINDS without the kinds that apply to some products only and did not run here."""
+        return [kind for kind in TEST_KINDS if kind not in APPLICABLE_WHEN_RUN or kind in self.kinds_run]
+
     def _overdue(self) -> dict:
         overdue: Counter = Counter()
         for group in self.groups:
@@ -2088,6 +2122,8 @@ class Report:
         section("secret", self._secrets)
         section("config", self._config)
         section("dast", self._dast)
+        if MOBILE in self.kinds_run or self.by_kind.get(MOBILE):
+            section("mobile", self._mobile)
         if self.by_kind.get(OTHER):
             section("other", self._other)
         section("decisions", self._decisions)
@@ -2611,7 +2647,7 @@ class Report:
 
         doc.h(3, self.t("testing_performed"), "testing")
         rows = []
-        for kind in TEST_KINDS:
+        for kind in self.test_kinds():
             checks = self.kind_checks.get(kind) or []
             if checks:
                 tools = sorted({" ".join(filter(None, tool_of(c))) for c in checks}, key=str.lower)
@@ -2694,7 +2730,7 @@ class Report:
         self._method_notes(doc)
 
         doc.h(3, self.t("not_covered"), "not-covered")
-        missing = [self.kind_label(k) for k in TEST_KINDS if k not in self.kinds_run]
+        missing = [self.kind_label(k) for k in self.test_kinds() if k not in self.kinds_run]
         if self.vi():
             paragraphs = [
                 "Kiểm thử tự động không tìm ra lỗi logic nghiệp vụ: truy cập dữ liệu của tenant khác qua một request "
@@ -2728,7 +2764,7 @@ class Report:
             paragraphs.append(sast_languages)
         for paragraph in paragraphs:
             doc.p(paragraph)
-        hints = [self.t(f"enable_{k}") for k in TEST_KINDS if k not in self.kinds_run]
+        hints = [self.t(f"enable_{k}") for k in self.test_kinds() if k not in self.kinds_run]
         if hints:
             doc.ul(hints)
 
@@ -2974,6 +3010,23 @@ class Report:
         groups = (self.by_kind.get(DAST) or []) + (self.by_kind.get(IAST) or [])
         if not self._ran_or_empty(doc, groups, (DAST, IAST)):
             return
+        self._rule_table(doc, groups)
+
+    def _mobile(self, doc: Doc, number: str) -> None:
+        doc.h(2, self.t("s_mobile"), "mobile", number)
+        groups = self.by_kind.get(MOBILE) or []
+        if not self._ran_or_empty(doc, groups, (MOBILE,)):
+            return
+        doc.p(
+            "Static analysis of the mobile app by MobSF: its code, manifest or Info.plist, network security "
+            "configuration, signing certificate and native binaries. The analysis of a built app covers its "
+            "libraries too; the analysis of the source covers the project's own code only. Each finding names its "
+            "OWASP MASVS control in its description. One row per rule."
+            if not self.vi()
+            else "Phân tích tĩnh ứng dụng di động bằng MobSF: mã, manifest hoặc Info.plist, cấu hình bảo mật mạng, "
+            "chứng chỉ ký và các tệp nhị phân native. Phân tích bản đã build bao gồm cả thư viện; phân tích mã nguồn "
+            "chỉ bao gồm mã của dự án. Mỗi phát hiện ghi control OWASP MASVS trong mô tả. Mỗi dòng một rule."
+        )
         self._rule_table(doc, groups)
 
     def _other(self, doc: Doc, number: str) -> None:
@@ -3235,10 +3288,12 @@ class Report:
             )
             if standard == OWASP:
                 doc.p(self.st("cwe_note"), cls="note")
+            if standard == SSDF and MOBILE in self.kinds_run:
+                doc.p(self.st("mobile_note"), cls="note")
         for s in statuses:
             for alternatives in s.missing:
                 missing_kinds |= alternatives
-        hints = [self.t(f"enable_{kind}") for kind in TEST_KINDS if kind in missing_kinds]
+        hints = [self.t(f"enable_{kind}") for kind in self.test_kinds() if kind in missing_kinds]
         if hints:
             doc.h(4, self.st("how_to_enable"), "std-enable", toc=False)
             doc.ul(hints)
@@ -3254,7 +3309,7 @@ class Report:
             evidence.append(self.st("gate_ok"))
         missing: list = []
         for alternatives in s.missing:
-            names = [self.st(f"kind_{kind}") for kind in TEST_KINDS if kind in alternatives]
+            names = [self.st(f"kind_{kind}") for kind in self.test_kinds() if kind in alternatives]
             missing.append(f" {self.st('or')} ".join(names))
         if s.gate_missing:
             missing.append(self.st("gate_missing"))
@@ -3404,7 +3459,7 @@ class Report:
                 "Nguồn dữ liệu: API của TDxGuard (observations, vulnerability_checks, observation_logs, rules, "
                 "settings, product_metrics). Thời gian quy về UTC.",
                 "Gộp: một lỗ hổng là một CVE (hoặc ID advisory) trong một gói nguồn; các gói nhị phân của cùng gói "
-                "nguồn hệ điều hành (cùng phiên bản) được gộp. SAST, bí mật, cấu hình: gộp theo rule.",
+                "nguồn hệ điều hành (cùng phiên bản) được gộp. SAST, bí mật, cấu hình, ứng dụng di động: gộp theo rule.",
                 "Đánh giá tổng thể: " + self._verdict_rule_text(),
                 "Xếp hạng rủi ro: KEV có bản vá, KEV, EPSS, mức độ, CVSS.",
                 'Quyết định của con người: log entry không phải do importer ghi ("Set by parser", "Updated by '
@@ -3416,8 +3471,8 @@ class Report:
                 "Data: the TDxGuard API (observations, vulnerability_checks, observation_logs, rules, settings, "
                 "product metrics). All times are converted to UTC.",
                 "Grouping: a vulnerability is one CVE (or advisory ID) in one source package; binary packages of one "
-                "operating system source package (same version) are merged. SAST, secrets and configuration: one "
-                "entry per rule.",
+                "operating system source package (same version) are merged. SAST, secrets, configuration and mobile "
+                "app findings: one entry per rule.",
                 "Overall assessment: " + self._verdict_rule_text(),
                 "Risk ranking: KEV with a fix, KEV, EPSS, severity, CVSS.",
                 'Decisions by people: log entries not written by the importer ("Set by parser", "Updated by '
