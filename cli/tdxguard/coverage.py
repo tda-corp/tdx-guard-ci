@@ -983,7 +983,8 @@ def mobile_suggestions(facts: RepoFacts) -> List[str]:
     flutter_apps = [os.path.dirname(pubspec) for pubspec in facts.pubspecs]
     for project in facts.xcode_projects:
         directory = os.path.dirname(project)
-        if any(directory == os.path.join(app, "ios") if app else directory == "ios" for app in flutter_apps):
+        # The paths are the repository's, with "/" on every platform: not os.path.join
+        if any(directory == (f"{app}/ios" if app else "ios") for app in flutter_apps):
             continue
         lines.append("ios" + (f":{directory}" if directory else ""))
     return list(dict.fromkeys(lines))
