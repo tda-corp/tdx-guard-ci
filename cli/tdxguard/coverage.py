@@ -15,6 +15,7 @@ switched on by optional inputs:
   GitHub   dockerfile / image_ref          -> image scan (several Dockerfiles: one per line)
            app_start_command               -> IAST (Aikido Zen), the runtime job
            app_start_command + zap_target  -> DAST (ZAP, and Nuclei with nuclei: true)
+           mobile_app / mobile_source      -> mobile app analysis (MobSF), GitHub only
   GitLab   IMAGE_REF                       -> image scan (one image, already pushed)
            APP_START_COMMAND               -> IAST
            ZAP_TARGET / NUCLEI_TARGET      -> DAST against a deployed environment
@@ -33,7 +34,7 @@ from urllib.parse import urlsplit
 
 import yaml
 
-from tdxguard.config import SKIPPED_DIRECTORIES, find_dockerfiles
+from tdxguard.config import find_dockerfiles, repository_files
 from tdxguard.engine.tools import RULE_LANGUAGES
 from tdxguard.errors import ConfigError
 
@@ -56,6 +57,7 @@ KINDS: List[Tuple[str, str]] = [
     ("image", "Container images"),
     ("iast", "Runtime (IAST)"),
     ("dast", "Running app (DAST)"),
+    ("mobile", "Mobile app (MobSF)"),
 ]
 ALWAYS_ON = ("secrets", "sast", "sca", "iac")
 
@@ -89,6 +91,11 @@ LOCKFILES = (
     "mix.lock",
 )
 LOCKFILE_PATTERNS = ("requirements*.txt", "*.csproj")
+GRADLE_BUILD_FILES = ("build.gradle", "build.gradle.kts")
+GRADLE_SETTINGS_FILES = ("settings.gradle", "settings.gradle.kts")
+# Trivy reads gradle.lockfile in every module, and buildscript-gradle.lockfile and
+# settings-gradle.lockfile next to them; build.gradle and libs.versions.toml it does not read.
+GRADLE_LOCKFILE_SUFFIX = "gradle.lockfile"
 COMPOSE_PATTERNS = ("docker-compose*.yml", "docker-compose*.yaml", "compose*.yml", "compose*.yaml")
 MAX_FILES = 20000
 
@@ -148,17 +155,22 @@ class RepoFacts:
     compose_files: List[str] = field(default_factory=list)
     # Commands that may start the application, with where they come from. Hints only.
     start_hints: List[Tuple[str, str]] = field(default_factory=list)
-
-
-def _walk(root: Path):
-    count = 0
-    for directory, subdirectories, files in os.walk(root):
-        subdirectories[:] = sorted(d for d in subdirectories if d not in SKIPPED_DIRECTORIES and d != ".venv")
-        for name in sorted(files):
-            count += 1
-            if count > MAX_FILES:
-                return
-            yield os.path.relpath(os.path.join(directory, name), root).replace(os.sep, "/"), name
+    # Mobile apps: the platforms found ("android", "ios", "flutter", "react-native") and
+    # the files Trivy needs to see their dependencies.
+    mobile_platforms: List[str] = field(default_factory=list)
+    gradle_modules: List[str] = field(default_factory=list)  # directories with a build.gradle(.kts)
+    gradle_roots: List[str] = field(default_factory=list)  # directories with a settings.gradle(.kts)
+    gradle_lockfiles: List[str] = field(default_factory=list)
+    android_manifests: List[str] = field(default_factory=list)
+    xcode_projects: List[str] = field(default_factory=list)
+    podfiles: List[str] = field(default_factory=list)
+    swift_packages: List[str] = field(default_factory=list)  # Package.swift
+    ios_lockfiles: List[str] = field(default_factory=list)  # Podfile.lock, Package.resolved
+    cartfiles: List[str] = field(default_factory=list)  # Cartfile.resolved
+    pubspecs: List[str] = field(default_factory=list)  # pubspec.yaml of a Flutter app
+    pubspec_locks: List[str] = field(default_factory=list)
+    react_native: List[str] = field(default_factory=list)  # package.json of a React Native or Expo app
+    truncated: int = 0  # the file count, when it is over MAX_FILES and only the first MAX_FILES were read
 
 
 def _looks_like_kubernetes(path: Path) -> bool:
@@ -170,9 +182,14 @@ def _looks_like_kubernetes(path: Path) -> bool:
 
 
 def inspect(root: Path) -> RepoFacts:
-    facts = RepoFacts(dockerfiles=find_dockerfiles(root))
-    for relative, name in _walk(root):
+    files = [p for p in repository_files(root) if not p.startswith(".venv/")]
+    facts = RepoFacts(dockerfiles=find_dockerfiles(root, files))
+    if len(files) > MAX_FILES:
+        facts.truncated = len(files)
+    for relative in files[:MAX_FILES]:
+        name = relative.rsplit("/", 1)[-1]
         lower = name.lower()
+        _mobile_file(root, facts, relative, name)
         language = SOURCE_LANGUAGES.get(os.path.splitext(lower)[1])
         if language:
             facts.source_languages[language] = facts.source_languages.get(language, 0) + 1
@@ -192,7 +209,70 @@ def inspect(root: Path) -> RepoFacts:
     # Trivy's misconfiguration scan reads Dockerfiles too.
     facts.iac_files += [d for d in facts.dockerfiles if d not in facts.iac_files]
     facts.start_hints = start_hints(root, facts.compose_files)
+    facts.mobile_platforms = _mobile_platforms(root, facts)
     return facts
+
+
+def _directory(relative: str) -> str:
+    return os.path.dirname(relative) or "."
+
+
+def _mobile_file(root: Path, facts: RepoFacts, relative: str, name: str) -> None:
+    if name in GRADLE_BUILD_FILES:
+        facts.gradle_modules.append(_directory(relative))
+    elif name in GRADLE_SETTINGS_FILES:
+        facts.gradle_roots.append(_directory(relative))
+    elif name.endswith(GRADLE_LOCKFILE_SUFFIX):
+        facts.gradle_lockfiles.append(relative)
+    elif name == "AndroidManifest.xml":
+        facts.android_manifests.append(relative)
+    elif name == "project.pbxproj" and os.path.dirname(relative).endswith(".xcodeproj"):
+        facts.xcode_projects.append(os.path.dirname(relative))
+    elif name == "Podfile":
+        facts.podfiles.append(relative)
+    elif name == "Package.swift":
+        facts.swift_packages.append(relative)
+    elif name in ("Podfile.lock", "Package.resolved"):
+        facts.ios_lockfiles.append(relative)
+    elif name == "Cartfile.resolved":
+        facts.cartfiles.append(relative)
+    elif name == "package.json" and _mentions(root / relative, r'"(react-native|expo)"\s*:'):
+        facts.react_native.append(relative)
+    elif name == "pubspec.lock":
+        facts.pubspec_locks.append(relative)
+    elif name == "pubspec.yaml" and _mentions(root / relative, r"sdk:\s*flutter"):
+        facts.pubspecs.append(relative)
+
+
+def _mentions(path: Path, pattern: str) -> bool:
+    try:
+        return bool(re.search(pattern, path.read_text(encoding="utf-8", errors="replace")[:20000]))
+    except OSError:
+        return False
+
+
+def _mobile_platforms(root: Path, facts: RepoFacts) -> List[str]:
+    platforms = []
+    # A Gradle build alone is a JVM project; an Android app has a manifest, or the Android
+    # Gradle plugin in its build files. Either way it needs a Gradle build (settings.gradle):
+    # an Expo module's android/ directory has a manifest but is built inside the app's
+    # generated, gitignored android/ project, and is not an app of its own.
+    if facts.gradle_roots and (
+        facts.android_manifests
+        or any(
+            _mentions(root / module / build, r"com\.android\.(application|library)|android\s*\{")
+            for module in facts.gradle_modules
+            for build in GRADLE_BUILD_FILES
+        )
+    ):
+        platforms.append("android")
+    if facts.xcode_projects or facts.podfiles:
+        platforms.append("ios")
+    if facts.pubspecs:
+        platforms.append("flutter")
+    if facts.react_native:
+        platforms.append("react-native")
+    return platforms
 
 
 def _is_cloudformation(path: Path) -> bool:
@@ -227,12 +307,16 @@ def start_hints(root: Path, compose_files: List[str]) -> List[Tuple[str, str]]:
         services = data.get("services") if isinstance(data, dict) else None
         if not isinstance(services, dict):
             continue
+        built, pulled = [], []
         for service_name, service in services.items():
             if isinstance(service, dict) and service.get("ports"):
                 ports = ", ".join(str(p) for p in service["ports"][:3]) if isinstance(service["ports"], list) else ""
-                hints.append(
+                # A service built from this repository is the application; one that only
+                # pulls an image is most often its database, cache or mail catcher.
+                (built if service.get("build") else pulled).append(
                     (f"docker compose -f {compose} up {service_name}", f"{compose}: service {service_name} ({ports})")
                 )
+        hints += built + pulled
     return hints
 
 
@@ -318,10 +402,12 @@ def configured_kinds(workflow: Optional[Workflow]) -> Dict[str, bool]:
         result["image"] = bool(_text(inputs, "dockerfile") or _text(inputs, "image_ref"))
         result["iast"] = bool(_text(inputs, "app_start_command"))
         result["dast"] = bool(_text(inputs, "app_start_command") and _text(inputs, "zap_target"))
+        result["mobile"] = bool(_text(inputs, "mobile_app") or _text(inputs, "mobile_source"))
     else:
         result["image"] = bool(_text(inputs, "IMAGE_REF"))
         result["iast"] = bool(_text(inputs, "APP_START_COMMAND"))
         result["dast"] = bool(_text(inputs, "ZAP_TARGET") or _text(inputs, "NUCLEI_TARGET"))
+        result["mobile"] = False  # the GitLab template has no MobSF job
     return result
 
 
@@ -335,6 +421,35 @@ class CIOptions:
     app_start_command: str = ""
     app_health_url: str = ""
     dast_target: str = ""
+    mobile_apps: List[str] = field(default_factory=list)  # built apps, a path or a glob each
+    mobile_sources: List[str] = field(default_factory=list)  # "android" or "ios:<dir>"
+
+
+MOBILE_APP_PATTERN = re.compile(r"^[A-Za-z0-9_.@+/*?\[\]-]+$")
+MOBILE_APP_SUFFIXES = (".apk", ".aab", ".apks", ".xapk", ".ipa")
+
+
+def check_mobile_app(value: str) -> str:
+    value = value.strip()
+    while value.startswith("./"):
+        value = value[2:]
+    if not value or value.startswith("/") or re.match(r"^[A-Za-z]:", value) or ".." in value.split("/"):
+        raise ConfigError(f"--mobile-app must be a path relative to the repository root: {value!r}")
+    if not MOBILE_APP_PATTERN.match(value) or not value.lower().endswith(MOBILE_APP_SUFFIXES):
+        raise ConfigError(
+            f"--mobile-app is the built app, a path or a glob ending in {', '.join(MOBILE_APP_SUFFIXES)}: {value!r}"
+        )
+    return value
+
+
+def check_mobile_source(value: str) -> str:
+    platform, _, directory = value.strip().partition(":")
+    if platform.strip().lower() not in ("android", "ios"):
+        raise ConfigError(f"--mobile-source is android or ios, optionally with :<directory>: {value!r}")
+    directory = directory.strip()
+    if directory in ("", "."):
+        return platform.strip().lower()
+    return f"{platform.strip().lower()}:{_check_path(directory, 'The project directory of --mobile-source')}"
 
 
 def _check_path(value: str, what: str) -> str:
@@ -418,6 +533,10 @@ def suggested_inputs(platform: str, options: CIOptions) -> Dict[str, str]:
                 inputs["app_health_url"] = _quote(options.app_health_url)
             if options.dast_target:
                 inputs["zap_target"] = _quote(options.dast_target)
+        if options.mobile_apps:
+            inputs["mobile_app"] = _lines_value(options.mobile_apps)
+        if options.mobile_sources:
+            inputs["mobile_source"] = _lines_value(options.mobile_sources)
     else:
         if options.image_ref:
             inputs["IMAGE_REF"] = _quote(options.image_ref)
@@ -429,6 +548,34 @@ def suggested_inputs(platform: str, options: CIOptions) -> Dict[str, str]:
         if options.dast_target:
             inputs["ZAP_TARGET"] = _quote(options.dast_target)
     return inputs
+
+
+def _lines_value(lines: List[str]) -> str:
+    """One line quoted, several as a YAML block scalar."""
+    if len(lines) == 1:
+        return _quote(lines[0])
+    return "|\n" + "".join(f"  {line}\n" for line in lines)
+
+
+MOBILE_BLOCK = (
+    "# --- Mobile app (MobSF) ---\n"
+    "# MobSF analyses the app in a throwaway container cut off from the network. The built\n"
+    "# app (.apk, .aab, .ipa) gives the most: the whole decompiled app, its libraries, the\n"
+    "# signing certificate and the native binaries. mobile_app_artifact downloads it from an\n"
+    "# earlier job of this workflow; mobile_source analyses the source instead.\n"
+)
+
+
+def _mobile_block(options: CIOptions) -> str:
+    block = MOBILE_BLOCK
+    if options.mobile_apps:
+        block += f"mobile_app: {_lines_value(options.mobile_apps)}" + ("" if len(options.mobile_apps) > 1 else "\n")
+        block += '# mobile_app_artifact: "app-release"   # the upload-artifact name of your build job\n'
+    if options.mobile_sources:
+        block += f"mobile_source: {_lines_value(options.mobile_sources)}" + (
+            "" if len(options.mobile_sources) > 1 else "\n"
+        )
+    return block
 
 
 def _github_blocks(options: CIOptions) -> List[str]:
@@ -473,6 +620,8 @@ def _github_blocks(options: CIOptions) -> List[str]:
             + OWN_NOTE
             + f"# zap_target: {_quote(options.dast_target)}\n"
         )
+    if options.mobile_apps or options.mobile_sources:
+        blocks.append(_mobile_block(options))
     return blocks
 
 
@@ -513,7 +662,16 @@ def _gitlab_blocks(options: CIOptions) -> List[str]:
         block += f"ZAP_TARGET: {_quote(options.dast_target)}\n"
         block += f"# NUCLEI_TARGET: {_quote(options.dast_target)}\n"
         blocks.append(block)
+    if options.mobile_apps or options.mobile_sources:
+        blocks.append(GITLAB_MOBILE_NOTE)
     return blocks
+
+
+GITLAB_MOBILE_NOTE = (
+    "# --- Mobile app (MobSF) --- GitHub only\n"
+    "# The GitLab template has no MobSF job yet. Analyse the app with `tdxguard scan`\n"
+    "# (mobile: in .tdxguard.yml, needs Docker), which uploads the result to TDxGuard.\n"
+)
 
 
 def _indent(text: str, spaces: int) -> str:
@@ -619,6 +777,9 @@ def input_changes(existing: Dict[str, Any], suggested: Dict[str, str]) -> List[s
 # --- Doctor ----------------------------------------------------------------------------
 
 
+NO_WORKFLOW = "No TDxGuard workflow found: nothing is scanned in CI."
+
+
 @dataclass
 class Row:
     kind: str
@@ -644,6 +805,8 @@ def received_text(scan_coverage: Optional[Dict[str, Any]], kind: str, state: str
         return "no such product"
     if state == "old" or scan_coverage is None:
         return "unknown (old server)"
+    if kind not in scan_coverage:
+        return "unknown (old server)"
     entry = scan_coverage.get(kind)
     last = entry.get("last_import") if isinstance(entry, dict) else None
     return str(last)[:10] if last else "never"
@@ -668,16 +831,33 @@ def diagnose(
         action, detail = "", ""
         if workflow is None:
             action = f"tdxguard init --ci {platform}" if expected != NO else ""
-            detail = "No TDxGuard workflow found: nothing is scanned in CI."
+            detail = NO_WORKFLOW
         elif not is_configured and expected != NO:
             action, detail = _what_to_add(kind, platform, facts, workflow, hint)
         elif is_configured and received == "never" and expected != NO:
             action = "push to the default branch"
             detail = "Configured, but TDxGuard has not received it yet: check the last pipeline run."
-        if kind == "sast" and not detail:
-            detail = _sast_gap(facts)
+        # What the scanner cannot see, whatever the workflow says
+        gap = _sast_gap(facts) if kind == "sast" else sca_gap(facts) if kind == "sca" else ""
+        if kind == "mobile" and workflow is not None and is_configured:
+            gap = _debug_build_note(str(workflow.inputs.get("mobile_app") or ""))
+        if gap:
+            detail = f"{detail}\n{gap}" if detail else gap
         rows.append(Row(kind, label, expected, why, is_configured, received, action, detail))
     return rows
+
+
+def _debug_build_note(mobile_app: str) -> str:
+    """A configured app that looks like a debug build: MobSF reports what only the debug build has."""
+    debug = [
+        line.strip() for line in mobile_app.splitlines() if re.search(r"(^|[/_.-])debug([/_.-]|$)", line.strip(), re.I)
+    ]
+    if not debug:
+        return ""
+    return (
+        f"{debug[0]} looks like a debug build: MobSF reports android:debuggable, the debug certificate and debug-only "
+        "libraries (LeakCanary) as findings of the app. Scan the release build (assembleRelease / bundleRelease)."
+    )
 
 
 def _expectation(kind: str, facts: RepoFacts) -> Tuple[str, str]:
@@ -696,6 +876,8 @@ def _expectation(kind: str, facts: RepoFacts) -> Tuple[str, str]:
         return (YES, _list(facts.iac_files)) if facts.iac_files else (NO, "no IaC files")
     if kind == "image":
         return (YES, _list(facts.dockerfiles)) if facts.dockerfiles else (NO, "no Dockerfile")
+    if kind == "mobile":
+        return (SUGGESTED, ", ".join(facts.mobile_platforms)) if facts.mobile_platforms else (NO, "no mobile app")
     if facts.start_hints:
         return SUGGESTED, facts.start_hints[0][1]
     return NO, "no start command found"
@@ -712,11 +894,128 @@ def _sast_gap(facts: RepoFacts) -> str:
     if not uncovered:
         return ""
     counted = ", ".join(f"{language} ({facts.source_languages[language]} files)" for language in uncovered)
-    return f"Opengrep has no rules for {counted}: SAST does not analyse that code."
+    text = f"Opengrep has no rules for {counted}: SAST does not analyse that code."
+    if {"swift", "objective-c"} & set(uncovered):
+        text += " MobSF's mobile app analysis has rules for Swift and Objective-C."
+    return text
+
+
+def gradle_task(module: str, gradle_root: str = ".") -> str:
+    """The dependencies task of a Gradle module directory, relative to the build's root
+    (the directory of settings.gradle): app -> :app:dependencies, the root -> dependencies."""
+    relative = os.path.relpath(module, gradle_root).replace(os.sep, "/")
+    return "dependencies" if relative == "." else ":" + relative.replace("/", ":") + ":dependencies"
+
+
+def gradle_root_of(module: str, roots: List[str]) -> str:
+    """The innermost Gradle build (settings.gradle directory) a module belongs to."""
+    candidates = [r for r in roots if r == "." or module == r or module.startswith(r + "/")]
+    return max(candidates, key=len) if candidates else "."
+
+
+def sca_gap(facts: RepoFacts) -> str:
+    """What Trivy cannot see of a mobile app's dependencies, and how to fix it. Trivy reads
+    lockfiles only: gradle.lockfile, Podfile.lock, Package.resolved, pubspec.lock."""
+    notes: List[str] = []
+    if "android" in facts.mobile_platforms or (facts.gradle_modules and "flutter" in facts.mobile_platforms):
+        locked = {_directory(path) for path in facts.gradle_lockfiles}
+        unlocked = [module for module in facts.gradle_modules if module not in locked]
+        if unlocked:
+            builds: Dict[str, List[str]] = {}
+            for module in unlocked:
+                builds.setdefault(gradle_root_of(module, facts.gradle_roots), []).append(module)
+            commands = []
+            for gradle_root, modules in list(builds.items())[:3]:
+                ordered = sorted(modules, key=lambda m: (m != gradle_root, m))[:8]
+                tasks = " ".join(gradle_task(m, gradle_root) for m in ordered)
+                where = "" if gradle_root == "." else f"cd {gradle_root} && "
+                commands.append(f"  {where}./gradlew {tasks} --write-locks")
+            if not facts.gradle_lockfiles:
+                first = "Trivy cannot see the Gradle dependencies: there is no gradle.lockfile, and Trivy reads"
+                first += " neither build.gradle nor libs.versions.toml."
+            else:
+                first = f"{len(unlocked)} Gradle module(s) without gradle.lockfile ({_list(unlocked, 3)}): Trivy"
+                first += " does not see their dependencies."
+            notes.append(
+                first + "\n"
+                "Turn on dependency locking for every module, in the root build.gradle(.kts) of the build:\n"
+                "  allprojects { dependencyLocking { lockAllConfigurations() } }\n"
+                "then write one gradle.lockfile per module and commit them:\n" + "\n".join(commands) + "\n"
+                "Run that command again whenever a dependency changes."
+            )
+    if facts.podfiles and not any(path.endswith("Podfile.lock") for path in facts.ios_lockfiles):
+        notes.append("Podfile without Podfile.lock: Trivy reads only the lockfile. Commit Podfile.lock (pod install).")
+    if facts.swift_packages and not any(path.endswith("Package.resolved") for path in facts.ios_lockfiles):
+        notes.append(
+            "Package.swift without Package.resolved: Trivy reads only the resolved file. Commit Package.resolved."
+        )
+    if facts.cartfiles:
+        notes.append(
+            "Carthage: Trivy does not read Cartfile.resolved, so the libraries it pins are not checked for known "
+            "vulnerabilities. Few iOS libraries have advisories in any database: keep them up to date "
+            "(carthage outdated)."
+        )
+    if facts.ios_lockfiles:
+        notes.append(
+            "CocoaPods and Swift packages: Trivy lists them, but few of them have advisories in the databases "
+            "Trivy uses, so expect few vulnerabilities to be reported for them."
+        )
+    if facts.react_native and not {"android", "ios"} & set(facts.mobile_platforms):
+        notes.append(
+            "React Native / Expo: Trivy reads the JavaScript dependencies from package-lock.json. The native "
+            "android/ and ios/ projects are generated (expo prebuild) and not in the repository, so their Gradle "
+            "and CocoaPods dependencies are seen only by MobSF, on the built app."
+        )
+    if facts.pubspecs and not facts.pubspec_locks:
+        notes.append("pubspec.yaml without pubspec.lock: Trivy reads only the lockfile. Commit pubspec.lock.")
+    return "\n".join(notes)
+
+
+def mobile_suggestions(facts: RepoFacts) -> List[str]:
+    """mobile_source lines for the projects MobSF can analyse as source."""
+    lines = []
+    for manifest in facts.android_manifests:
+        if manifest.endswith("app/src/main/AndroidManifest.xml"):
+            directory = manifest[: -len("app/src/main/AndroidManifest.xml")].rstrip("/")
+            lines.append("android" + (f":{directory}" if directory else ""))
+    # A Flutter app's ios/ holds the Runner shell and no app code (MobSF says "No Code"): its
+    # Dart code is analysed in the built .ipa only
+    flutter_apps = [os.path.dirname(pubspec) for pubspec in facts.pubspecs]
+    for project in facts.xcode_projects:
+        directory = os.path.dirname(project)
+        # The paths are the repository's, with "/" on every platform: not os.path.join
+        if any(directory == (f"{app}/ios" if app else "ios") for app in flutter_apps):
+            continue
+        lines.append("ios" + (f":{directory}" if directory else ""))
+    return list(dict.fromkeys(lines))
+
+
+def _mobile_action(platform: str, facts: RepoFacts) -> Tuple[str, str]:
+    sources = mobile_suggestions(facts)
+    if platform != GITHUB:
+        return (
+            "tdxguard scan (mobile: in .tdxguard.yml)",
+            "The GitLab template has no MobSF job yet: analyse the app locally with `tdxguard scan` "
+            "(needs Docker), which uploads the result.",
+        )
+    detail = (
+        "MobSF analyses the built app best (the runner needs Docker): name the .apk/.aab/.ipa your build "
+        "produces, with mobile_app_artifact when an earlier job uploads it."
+    )
+    if sources:
+        detail += f" Without a build in CI: mobile_source: {_quote(sources[0])} analyses the source."
+    if facts.pubspecs:
+        detail += (
+            " Flutter: the app's code is Dart, which MobSF sees in the built app only (flutter build apk, "
+            "flutter build ipa); the source of android/ and ios/ holds little more than the manifest."
+        )
+    return 'mobile_app: "<path to the built .apk or .ipa>"', detail
 
 
 def _what_to_add(kind: str, platform: str, facts: RepoFacts, workflow: Workflow, hint: str) -> Tuple[str, str]:
     inputs = workflow.inputs
+    if kind == "mobile":
+        return _mobile_action(platform, facts)
     if kind == "image":
         if platform == GITHUB:
             if len(facts.dockerfiles) == 1:

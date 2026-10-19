@@ -162,6 +162,20 @@ class TestUploadPlan(unittest.TestCase):
             self.assertEqual(
                 {"product_name": "p", "branch_name": "b", "parser_name": "SARIF"}, plan[1].fields("p", "b")
             )
+            # Without licenses only a CycloneDX upload says so, a SARIF upload has no components
+            self.assertEqual(
+                {
+                    "product_name": "p",
+                    "branch_name": "local/jane/main",
+                    "parser_name": "CycloneDX",
+                    "suppress_licenses": "true",
+                },
+                plan[3].fields("p", "local/jane/main", licenses=False),
+            )
+            self.assertEqual(
+                {"product_name": "p", "branch_name": "b", "parser_name": "SARIF"},
+                plan[1].fields("p", "b", licenses=False),
+            )
 
     def test_clean_betterleaks_is_uploaded(self):
         # A clean scan goes up too, so that TDxGuard records that the secrets scan ran
@@ -182,3 +196,23 @@ class TestUploadPlan(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestKeptReports(unittest.TestCase):
+    def test_an_earlier_run_does_not_go_up_again(self):
+        from tdxguard import commands
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "kept"
+            out.mkdir()
+            stale = ["betterleaks.json", "opengrep.sarif", "trivy.sarif", "sbom.cdx.json", "summary.json",
+                     "sbom-image-api.cdx.json", "trivy-image-api.sarif", "mobsf-release-app-apk.json"]  # fmt: skip
+            for name in stale:
+                (out / name).write_text("{}")
+            (out / "notes.txt").write_text("mine")
+            (out / "report.pdf").write_text("%PDF")
+
+            self.assertEqual(sorted(stale), [path.name for path in reports.report_files(out)])
+            self.assertEqual(out.resolve(), commands._prepare_out_dir(str(out), "demo"))
+            self.assertEqual(["notes.txt", "report.pdf"], sorted(path.name for path in out.iterdir()))
+            self.assertEqual([], reports.upload_plan(out, {}))

@@ -138,6 +138,10 @@ images:                            # images to scan; optional
     name: root                     # slug; default derived from the path, as in CI
   - ref: ghcr.io/tda-corp/tdx-scribe-api:1.4   # pulled from its registry by Trivy, not built
     name: api                      # optional; default: last path segment and tag (tdx-scribe-api-1.4)
+mobile:                            # a mobile app MobSF analyses (needs Docker); optional
+  - app: app/build/outputs/apk/release/*.apk   # the built .apk/.aab/.ipa; a glob is fine
+  - source: ios                    # or the source: android or ios
+    path: ios                      # the project directory; default: the repository root
 gate:                              # optional; `tdxguard scan` exits 1 when exceeded
   critical: 0
   high: null                       # null = no limit
@@ -154,6 +158,8 @@ gate:                              # optional; `tdxguard scan` exits 1 when exce
 | `images[].context` | path | Defaults to the Dockerfile's directory. Note that CI builds from the repository root. |
 | `images[].ref` | image reference | An image in a registry, such as `ghcr.io/org/app:tag`. Nothing is built: Trivy pulls it from the registry (`trivy image --image-src remote`), with or without Docker. Private registries use Trivy's usual credentials (`docker login`, or `TRIVY_USERNAME`/`TRIVY_PASSWORD`). |
 | `images[].name` | slug | `[a-z0-9][a-z0-9._-]*`. The default is derived like the CI template: `docker/backend/Dockerfile` becomes `docker-backend`, `Dockerfile` becomes `root`, `Dockerfile.prod` becomes `prod`; for a `ref`, the last path segment and the tag (`ghcr.io/org/app:1.2` becomes `app-1.2`). |
+| `mobile[].app` | path or glob | A built app, `.apk`, `.aab`, `.apks`, `.xapk` or `.ipa`, matching exactly one file. Gives far more than the source: MobSF decompiles the whole app, its libraries included, and checks the certificate and native binaries. See [Mobile apps](#mobile-apps-mobsf). |
+| `mobile[].source`, `mobile[].path` | `android` or `ios`, directory | The project's source, zipped and analysed. Android needs the Android Studio layout (`app/src/main/AndroidManifest.xml`), and only that app module is analysed. |
 | `gate.critical`, `gate.high` | int >= 0 or null | The highest allowed count. |
 | `gate.ignore_unfixed` | bool | Ignores vulnerabilities that have no fixed version. |
 
@@ -163,8 +169,8 @@ The tool rejects unknown keys and wrong types, and the message names the key pat
 ## Full coverage: `init` and `doctor`
 
 Without optional inputs the CI runs three scans: secrets, code (SAST), and dependencies plus
-infrastructure as code (Trivy). Container images, IAST (Aikido Zen) and DAST (ZAP, Nuclei)
-need inputs in the workflow. Two commands make that visible.
+infrastructure as code (Trivy). Container images, IAST (Aikido Zen), DAST (ZAP, Nuclei) and a
+mobile app (MobSF) need inputs in the workflow. Two commands make that visible.
 
 **`tdxguard init`** writes the CI workflow next to `.tdxguard.yml`:
 `.github/workflows/tdxguard.yml` on GitHub, or prints the block for `.gitlab-ci.yml` on GitLab.
@@ -180,6 +186,7 @@ asks; in scripts pass flags and `--yes`.
 | `--image-ref REF` | an image in a registry (GitLab: `$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA` when your build job pushes it) |
 | `--start-command CMD`, `--health-url URL` | start the app in CI: IAST, and on GitHub the in-job ZAP scan |
 | `--dast-target URL` | URL for ZAP. Only an environment you own, never production without approval |
+| `--mobile-app PATH`, `--mobile-source PLATFORM[:DIR]` | the built app (or the source) MobSF analyses in CI; repeatable; GitHub only |
 | `--yes`, `--no-ci`, `--force` | ask nothing; skip the workflow; overwrite the files |
 
 An existing workflow is not overwritten without `--force`; `init` lists the inputs to add
@@ -207,10 +214,28 @@ Swift, Dart or C++ for example, is not analysed, and doctor says so under the ta
 Code (SAST): Opengrep has no rules for rust (42 files): SAST does not analyse that code.
 ```
 
+Doctor recognises mobile apps: Android (an `AndroidManifest.xml`, or the Android Gradle plugin),
+iOS (an `.xcodeproj` or a `Podfile`), Flutter (`pubspec.yaml` with `sdk: flutter`) and React
+Native. It suggests the mobile app analysis for them, and under the dependencies row it says what
+Trivy cannot see. Trivy reads lockfiles only: `gradle.lockfile` (one per module, plus
+`buildscript-gradle.lockfile` and `settings-gradle.lockfile`), `Podfile.lock`,
+`Package.resolved`, `pubspec.lock` — not `build.gradle`, `libs.versions.toml`, `Podfile`,
+`Package.swift` or `pubspec.yaml`. For an Android project without lockfiles:
+
+```
+Dependencies (SCA):
+    Trivy cannot see the Gradle dependencies: there is no gradle.lockfile, and Trivy reads neither build.gradle nor libs.versions.toml.
+    Turn on dependency locking for every module, in the root build.gradle(.kts) of the build:
+      allprojects { dependencyLocking { lockAllConfigurations() } }
+    then write one gradle.lockfile per module and commit them:
+      ./gradlew dependencies :app:dependencies :core:network:dependencies --write-locks
+    Run that command again whenever a dependency changes.
+```
+
 Exit code 0 when every kind marked `yes` is configured in CI, 1 otherwise, 2 on an error.
 `--no-fail` always exits 0; `--offline` does not ask TDxGuard; `--json` prints JSON.
-IAST and DAST are `suggested`, not required: they need the app to embed Zen and a target the
-team owns.
+IAST, DAST and the mobile app are `suggested`, not required: they need the app to embed Zen, a
+target the team owns, or a built app.
 
 The same questions, with a live preview, are on the **New project** page and on each product's
 **Integration** tab in TDxGuard.
@@ -260,20 +285,48 @@ The scan runs these steps:
    users cannot create projects.
 6. It checks the gate from `.tdxguard.yml`.
 
+Between steps 3 and 4 it analyses the apps of `mobile:` with MobSF, see
+[Mobile apps](#mobile-apps-mobsf).
+
+### Mobile apps (MobSF)
+
+With `mobile:` in `.tdxguard.yml`, `tdxguard scan` analyses the app with MobSF (Mobile Security
+Framework), whatever the engine: MobSF runs from its official image
+(`opensecurity/mobile-security-framework-mobsf:v4.5.3`, about 1 GB to download, 2.3 GB unpacked)
+as a throwaway container, so it needs Docker; without Docker the scan says so and goes on with
+the other scanners. The container is cut off from the network before the app is copied in, so
+neither the app nor anything found in it leaves the machine; it needs the network only while it
+starts, to download its decompiler, which takes one to three minutes on every scan. Each entry
+writes `mobsf-<slug>.json`, uploaded with the MobSF parser; the findings are of the kind
+"Mobile app" in TDxGuard. `--skip mobile` leaves it out; `TDXGUARD_MOBSF_IMAGE` replaces the
+image (a mirror, for example). The same script runs in the GitHub template's `mobile` job.
+
+MobSF's findings do not count in the local gate, as they do not fail CI either; their high
+findings count in the product's security gate in TDxGuard.
+
 The results go to the branch `local/<username>/<git branch>`, so a working tree with
 uncommitted changes never mixes with the results of the real branches. To choose another
 branch, pass `--branch NAME`.
+
+On a `local/` branch TDxGuard imports the vulnerabilities of the CycloneDX SBOMs, but not
+their components and licenses (`suppress_licenses`), like the CI templates on a pull
+request. A local scan is a throwaway copy of the project: TDxGuard deletes it after
+`branch_housekeeping_keep_inactive_days_ephemeral` days (3 by default) without an upload,
+and a copy of every component per developer and branch is what made the database grow.
+The findings, the gate and the SCA coverage are the same either way. Pass `--sbom` to
+import the components too; a `--branch` outside `local/` always gets them.
 
 | Option | |
 |---|---|
 | `--no-upload` | scan only; nothing leaves the machine and no login is needed |
 | `--engine auto\|docker\|native` | where the scanners run; see [Engines](#engines-docker-or-native) |
 | `--branch NAME` | the branch name in TDxGuard |
-| `--skip SCANNER` | `betterleaks`, `opengrep`, `trivy` or `image`; can be repeated |
+| `--sbom` | also import the components and licenses of the SBOMs on a `local/` branch |
+| `--skip SCANNER` | `betterleaks`, `opengrep`, `trivy`, `image` or `mobile`; can be repeated |
 | `--image-only` / `--no-images` | scan only the images, or skip building and scanning them |
 | `--secrets-mode dir\|git` | search for secrets in the working tree (`dir`) or in the git history (`git`). With the docker engine, `git` does not work in a git worktree. |
 | `--log-opts="..."` | `git log` options for `--secrets-mode git`; write it with `=` |
-| `--keep DIR` | write the reports to DIR instead of `~/.cache/tdxguard/reports/<project>/` (that directory is emptied on every scan) |
+| `--keep DIR` | write the reports to DIR instead of `~/.cache/tdxguard/reports/<project>/` (that directory is emptied on every scan). The reports of an earlier run in DIR are deleted first, so that only this run's go up; other files in DIR stay |
 | `--json` | print a JSON document on stdout; messages go to stderr |
 | `-v` | stream the output of `docker build` and of the scanners |
 

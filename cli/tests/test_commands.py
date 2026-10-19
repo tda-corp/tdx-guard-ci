@@ -41,7 +41,8 @@ class TestArguments(unittest.TestCase):
             ["opengrep", "trivy"], commands.resolve_skips(self.parse(["scan", "--skip", "opengrep", "--skip", "trivy"]))
         )
         self.assertEqual(
-            ["betterleaks", "opengrep", "trivy"], commands.resolve_skips(self.parse(["scan", "--image-only"]))
+            ["betterleaks", "opengrep", "trivy", "mobile"],
+            commands.resolve_skips(self.parse(["scan", "--image-only"])),
         )
         self.assertEqual(
             ["trivy", "image"], commands.resolve_skips(self.parse(["scan", "--skip", "trivy", "--no-images"]))
@@ -324,6 +325,7 @@ class TestScan(EnvironmentTestCase):
                         "product_name": "tdx-scribe",
                         "branch_name": "local/jane/feature/login",
                         "parser_name": "CycloneDX",
+                        "suppress_licenses": "true",
                     },
                 ),
                 (
@@ -333,11 +335,13 @@ class TestScan(EnvironmentTestCase):
                         "branch_name": "local/jane/feature/login",
                         "parser_name": "CycloneDX",
                         "docker_image_name_tag": "tdxguard-local/docker-api:scan",
+                        "suppress_licenses": "true",
                     },
                 ),
             ],
             uploads,
         )
+        self.assertIn("components and licenses of the SBOM are not imported for a local scan", err)
         document = json.loads(out)
         # The observations of the branch, with the filter in the URL the way the frontend keeps it
         url = (
@@ -372,6 +376,34 @@ class TestScan(EnvironmentTestCase):
         self.assertEqual("https://guard.example.com/products/7/show", json.loads(out)["upload"]["url"])
         self.assertIn("(branch release/1.2)", err)
         self.assertNotIn("kept apart", err)
+        # A branch outside local/ gets the components and licenses of the SBOM
+        self.assertNotIn("suppress_licenses", str(client.upload.call_args_list))
+        self.assertNotIn("not imported for a local scan", err)
+
+    @patch("tdxguard.commands.server.Client")
+    def test_sbom_imports_the_components_of_a_local_scan(self, client_cls):
+        os.environ["TDXGUARD_TOKEN"] = "t"
+        os.environ["TDXGUARD_SERVER"] = "https://guard.example.com"
+        client = client_cls.return_value
+        client.me.return_value = {"username": "jane"}
+        client.find_product.return_value = {"id": 7, "name": "tdx-scribe", "security_gate_passed": True}
+        client.upload.return_value = {"observations_new": 0, "observations_resolved": 0}
+        client.find_branch.return_value = {"id": 31, "name": "local/jane/feature/login"}
+
+        code, _, err = run_main(["scan", "--no-images", "--json", "--sbom"])
+
+        self.assertEqual(EXIT_GATE, code, err)
+        sbom_fields = [c[0][1] for c in client.upload.call_args_list if Path(c[0][0]).name.endswith(".cdx.json")]
+        self.assertTrue(sbom_fields)
+        for fields in sbom_fields:
+            self.assertEqual("local/jane/feature/login", fields["branch_name"])
+            self.assertNotIn("suppress_licenses", fields)
+
+    def test_imports_licenses(self):
+        self.assertFalse(commands.imports_licenses("local/jane/main", False))
+        self.assertTrue(commands.imports_licenses("local/jane/main", True))
+        self.assertTrue(commands.imports_licenses("main", False))
+        self.assertTrue(commands.imports_licenses("release/local/x", False))
 
     @patch("tdxguard.commands.server.Client")
     def test_expired_token_stops_before_scanning(self, client_cls):

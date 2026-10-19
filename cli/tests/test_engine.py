@@ -8,14 +8,18 @@ import contextlib
 import io
 import json
 import os
+import re
 import shutil
 import stat
+import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from tdxguard import reports
 from tdxguard.engine import __main__ as container
 from tdxguard.engine import scan, tools
 
@@ -39,12 +43,19 @@ if name in os.environ.get("FAKE_FAIL", "").split(","):
 def out(flag):
     return args[args.index(flag) + 1]
 if name == "betterleaks":
+    # The engine's default config lives in its work directory, gone once the scan is over.
+    if "-c" in args and os.path.isabs(out("-c")):
+        shutil.copy(out("-c"), os.environ["FAKE_LOG"] + ".config")
     content = os.environ.get("FAKE_BETTERLEAKS")
     if content is not None:
         open(out("-r"), "w").write(content)
     else:
         shutil.copy(os.path.join(fixtures, "betterleaks.fixture.json"), out("-r"))
 elif name == "opengrep":
+    rules = out("--config")
+    with open(os.environ["FAKE_LOG"] + ".rules", "w") as listing:
+        listing.write("\n".join(sorted(os.path.relpath(os.path.join(d, f), rules)
+                                         for d, _, fs in os.walk(rules) for f in fs)))
     shutil.copy(os.path.join(fixtures, "opengrep.fixture.json"), out("--output"))
     sys.exit(int(os.environ.get("FAKE_OPENGREP_EXIT", "0")))
 elif name == "trivy":
@@ -79,6 +90,10 @@ class EngineTestCase(unittest.TestCase):
         (rules / "python" / "flask" / "security" / "audit" / "directly-returned-format-string.yaml").write_text(
             "rules:\n  - id: directly-returned-format-string\n"
         )
+        (rules / "generic" / "secrets" / "security").mkdir(parents=True)
+        (rules / "generic" / "secrets" / "security" / "detected-google-api-key.yaml").write_text("rules: []\n")
+        (rules / "generic" / "nginx" / "security").mkdir(parents=True)
+        (rules / "generic" / "nginx" / "security" / "alias-path-traversal.yaml").write_text("rules: []\n")
         (rules / tools.MARKER).write_text("{}")
         self.toolset = tools.Toolset(
             betterleaks=bin_dir / "betterleaks", opengrep=bin_dir / "opengrep", trivy=bin_dir / "trivy", rules=rules
@@ -141,22 +156,26 @@ class TestScan(EngineTestCase):
 
         calls = self.calls()
         out = str(self.out)
+        betterleaks = calls[0]
+        self.assertEqual(["betterleaks", "dir", ".", "-c"], betterleaks[:4])
+        self.assertTrue(betterleaks[4].endswith("betterleaks.toml"), betterleaks)
         self.assertEqual(
-            ["betterleaks", "dir", ".", "-f", "json", "-r", f"{out}/betterleaks.json", "--exit-code", "0", "--redact",
-             "--no-banner"],
-            calls[0],
-        )  # fmt: skip
+            ["-f", "json", "-r", f"{out}/betterleaks.json", "--exit-code", "0", "--redact", "--no-banner"],
+            betterleaks[5:],
+        )
+        self.assertEqual(scan.BETTERLEAKS_DEFAULT_CONFIG, Path(f"{self.log}.config").read_text())
         opengrep = calls[1]
         self.assertEqual(["opengrep", "scan", "--sarif", "--output", f"{out}/opengrep.sarif", "--quiet", "--config"],
                          opengrep[:7])  # fmt: skip
         self.assertTrue(opengrep[7].endswith("ogrules-security"))
         self.assertEqual(
-            ["--exclude=node_modules", "--exclude=.venv", "--exclude=vendor", "--exclude=dist", "--exclude=build",
-             "--exclude=*.md", "--exclude=*.example", "--exclude=ogrules", "--exclude=ogrules-security",
+            ["--exclude=node_modules", "--exclude=bower_components", "--exclude=vendor", "--exclude=Pods",
+             "--exclude=Carthage", "--exclude=.venv", "--exclude=dist", "--exclude=build", "--exclude=*.md", "--exclude=*.example", "--exclude=ogrules", "--exclude=ogrules-security",
              "--exclude=mobile/", "--exclude=*.lock", "."],
             opengrep[8:],
         )  # fmt: skip
-        skip = ["--skip-dirs", "node_modules", "--skip-dirs", ".venv", "--skip-dirs", "vendor",
+        skip = ["--skip-dirs", "**/node_modules", "--skip-dirs", "**/bower_components", "--skip-dirs", "**/vendor",
+                "--skip-dirs", "**/Pods", "--skip-dirs", "**/Carthage", "--skip-dirs", ".venv",
                 "--skip-dirs", "mobile/", "--skip-files", "mobile/",
                 "--skip-dirs", "*.lock", "--skip-files", "*.lock"]  # fmt: skip
         self.assertEqual(
@@ -184,8 +203,75 @@ class TestScan(EngineTestCase):
         self.assertIn("opengrep-prune-rules: flask name-only rules (1): whole repository", self.output)
         self.assertTrue(any(line.startswith("sarif-enrich: opengrep.sarif") for line in self.output), self.output)
 
+    def test_repository_secrets_config_wins(self):
+        """A repository's own config replaces the default one, as in CI."""
+        (self.src / ".gitleaks.toml").write_text("[extend]\nuseDefault = true\n")
+        self.run_scan(skips=["opengrep", "trivy"])
+        self.assertEqual(["-c", ".gitleaks.toml"], self.calls()[0][3:5])
+
+        # Betterleaks reads a .betterleaks.toml by itself; -c would override it.
+        (self.src / ".gitleaks.toml").unlink()
+        (self.src / ".betterleaks.toml").write_text("[extend]\nuseDefault = true\n")
+        self.log.unlink()
+        self.run_scan(skips=["opengrep", "trivy"])
+        self.assertNotIn("-c", self.calls()[0])
+
+    def test_what_git_ignores_is_left_out(self):
+        """Ignored build output and a nested worktree: not scanned, the repository's own config still applies."""
+        subprocess.run(["git", "init", "-q", str(self.src)], check=True)
+        (self.src / ".gitignore").write_text("target/\n*.log\n")
+        (self.src / ".gitleaks.toml").write_text("[extend]\nuseDefault = true\n")
+        (self.src / "target" / "debug").mkdir(parents=True)
+        (self.src / "debug.log").write_text("x\n")
+        (self.src / "a [b]").mkdir()
+        subprocess.run(["git", "init", "-q", str(self.src / "a [b]")], check=True)
+        self.assertEqual(["a [b]/", "debug.log", "target/"], scan.outside_repository(self.src))
+
+        self.run_scan(skips=["opengrep"])
+        betterleaks = self.calls()[0]
+        self.assertTrue(betterleaks[4].endswith("betterleaks.toml"), betterleaks)
+        config = tomllib.loads(Path(f"{self.log}.config").read_text())
+        self.assertEqual({"path": str((self.src / ".gitleaks.toml").resolve())}, config["extend"])
+        paths = config["allowlists"][0]["paths"]
+        self.assertEqual(["^a \\[b\\]/", "^debug\\.log$", "^target/"], paths)
+        for path, left_out in (
+            ("target/debug/app.py", True),
+            ("a [b]/x.py", True),
+            ("debug.log", True),
+            ("src/debug.log", False),
+            ("debug.logx", False),
+        ):
+            self.assertEqual(left_out, any(re.search(p, path) for p in paths), path)  # fmt: skip
+        trivy = self.calls()[1]
+        self.assertIn(["--skip-dirs", "a \\[b\\]"], [trivy[i : i + 2] for i in range(len(trivy))])
+        self.assertIn(["--skip-files", "debug.log"], [trivy[i : i + 2] for i in range(len(trivy))])
+        self.assertIn(["--skip-dirs", "target"], [trivy[i : i + 2] for i in range(len(trivy))])
+
+        # The history holds no ignored file: git mode keeps the repository's config as it is.
+        self.log.unlink()
+        self.run_scan(skips=["opengrep", "trivy"], secrets_mode="git")
+        self.assertEqual(["-c", ".gitleaks.toml"], self.calls()[0][3:5])
+
+    def test_default_secrets_config_skips_vendored_code(self):
+        paths = re.search(r"paths = \['''(.+)'''\]", scan.BETTERLEAKS_DEFAULT_CONFIG).group(1)
+        for path in (
+            "Carthage/Checkouts/Alamofire/Tests/a.swift",
+            "Pods/Firebase/x.m",
+            "web/node_modules/a/b.js",
+            "vendor/laravel/framework/c.php",
+            "bower_components/d.js",
+        ):
+            self.assertIsNotNone(re.search(paths, path), path)
+        for path in ("App/Config.swift", "src/vendors.ts", "MyPods/a.m", "app/Carthage.swift"):
+            self.assertIsNone(re.search(paths, path), path)
+
     def test_rule_tree_untouched_and_marker_not_a_rule(self):
         self.run_scan(skips=["betterleaks", "trivy"])
+        # Secrets are Betterleaks' job: the copy Opengrep reads has no generic/secrets.
+        loaded = Path(f"{self.log}.rules").read_text().splitlines()
+        self.assertIn("generic/nginx/security/alias-path-traversal.yaml", loaded)
+        self.assertFalse([path for path in loaded if path.startswith("generic/secrets/")], loaded)
+        self.assertTrue((self.toolset.rules / "generic" / "secrets" / "security").is_dir())
         # The pruning works on a copy; the installed rules stay as they are.
         self.assertTrue(
             (
@@ -225,6 +311,18 @@ class TestScan(EngineTestCase):
         code = self.run_scan(skips=["betterleaks", "trivy"])
         self.assertEqual(0, code)
         self.assertEqual(["opengrep exited with status 2 but wrote a report"], self.summary()["warnings"])
+
+    def test_firebase_client_key_is_not_severe(self):
+        findings = [
+            {"RuleID": "gcp-api-key", "File": "android/app/src/prod/google-services.json"},
+            {"RuleID": "gcp-api-key", "File": "lib/firebase_options_dev.dart"},
+            {"RuleID": "gcp-api-key", "File": "lib/config.dart"},
+        ]
+        self.environment["FAKE_BETTERLEAKS"] = json.dumps(findings)
+        self.run_scan(skips=["opengrep", "trivy"])
+        row = self.summary()["rows"][0]
+        self.assertEqual((3, 1), (row["findings"], row["severe"]))
+        self.assertEqual(1, reports.count(self.out).high)
 
     def test_clean_betterleaks_and_uncountable_report(self):
         self.environment["FAKE_BETTERLEAKS"] = "null"

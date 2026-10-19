@@ -43,6 +43,19 @@ class TestInspect(unittest.TestCase):
         commands = [command for command, _ in facts.start_hints]
         self.assertEqual(["npm start", "docker compose -f docker-compose.yml up api"], commands)
 
+    def test_start_hint_prefers_the_service_built_here(self):
+        compose = {
+            "services": {
+                "mailpit": {"image": "axllent/mailpit", "ports": ["8025:8025"]},
+                "postgres": {"image": "postgres:16"},
+                "app": {"build": ".", "ports": ["8000:8000"]},
+            }
+        }
+        write(self.root, "docker-compose.yml", yaml.safe_dump(compose))
+        commands = [command for command, _ in coverage.inspect(self.root).start_hints]
+        self.assertEqual(["docker compose -f docker-compose.yml up app", "docker compose -f docker-compose.yml up mailpit"],
+                         commands)  # fmt: skip
+
     def test_iac(self):
         write(self.root, "infra/main.tf", 'resource "x" "y" {}\n')
         write(self.root, "k8s/deploy.yaml", "apiVersion: apps/v1\nkind: Deployment\n")
@@ -86,6 +99,7 @@ class TestWorkflow(unittest.TestCase):
             app_start_command='gunicorn -b 127.0.0.1:8000 "app.wsgi:application"',
             app_health_url="http://127.0.0.1:8000/health",
             dast_target="https://staging.example.com",
+            mobile_apps=["app/build/outputs/apk/release/*.apk"],
         )
         write(
             self.root,
@@ -101,6 +115,7 @@ class TestWorkflow(unittest.TestCase):
         self.assertEqual("Dockerfile\nweb/Dockerfile web\n", workflow.inputs["dockerfile"])
         self.assertEqual('gunicorn -b 127.0.0.1:8000 "app.wsgi:application"', workflow.inputs["app_start_command"])
         self.assertEqual("https://staging.example.com", workflow.inputs["zap_target"])
+        self.assertEqual("app/build/outputs/apk/release/*.apk", workflow.inputs["mobile_app"])
         self.assertEqual("ci-app", workflow.inputs["bao_role"])
         self.assertTrue(all(coverage.configured_kinds(workflow).values()))
 
@@ -217,7 +232,8 @@ class TestDiagnose(unittest.TestCase):
         rows = {row.kind: row for row in coverage.diagnose(facts, workflow, "github", None, "offline")}
         self.assertEqual("php, javascript", rows["sast"].why)
         self.assertEqual(
-            "Opengrep has no rules for rust (7 files), swift (2 files): SAST does not analyse that code.",
+            "Opengrep has no rules for rust (7 files), swift (2 files): SAST does not analyse that code. "
+            "MobSF's mobile app analysis has rules for Swift and Objective-C.",
             rows["sast"].detail,
         )
         # Still configured, and a gap in the rules is not a gap in the workflow.

@@ -8,9 +8,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
+from tdxguard.engine.scan import is_firebase_client_key
+
 SUMMARY_FILE = "summary.json"
 IMAGE_SBOM = re.compile(r"^sbom-image-(?P<slug>.+)\.cdx\.json$")
 IMAGE_SARIF = re.compile(r"^trivy-image-(?P<slug>.+)\.sarif$")
+MOBSF_REPORT = re.compile(r"^mobsf-(?P<slug>.+)\.json$")
 
 
 def load_json(path: Path) -> Any:
@@ -35,11 +38,17 @@ class Upload:
     parser: str
     docker_image_name_tag: Optional[str] = None
 
-    def fields(self, product: str, branch: str) -> Dict[str, str]:
-        """The same form fields as tg_push in ci-templates/tdxguard-lib.sh."""
+    def fields(self, product: str, branch: str, licenses: bool = True) -> Dict[str, str]:
+        """
+        The same form fields as tg_push in ci-templates/tdxguard-lib.sh. Without `licenses`
+        TDxGuard imports the vulnerabilities of a CycloneDX SBOM but not its components and
+        licenses, like the CI templates do on a pull request.
+        """
         fields = {"product_name": product, "branch_name": branch, "parser_name": self.parser}
         if self.docker_image_name_tag:
             fields["docker_image_name_tag"] = self.docker_image_name_tag
+        if self.parser == "CycloneDX" and not licenses:
+            fields["suppress_licenses"] = "true"
         return fields
 
 
@@ -66,7 +75,31 @@ def upload_plan(out: Path, image_refs: Mapping[str, str]) -> List[Upload]:
         elif sbom:
             slug = sbom.group("slug")
             plan.append(Upload(path, "CycloneDX", image_refs.get(slug, f"tdxguard-local/{slug}:scan")))
+    # The mobile app analysis (MobSF), written by tdxguard.engine.helpers.mobsf_scan
+    for path in sorted(out.iterdir()) if out.is_dir() else []:
+        if MOBSF_REPORT.match(path.name):
+            plan.append(Upload(path, "MobSF"))
     return plan
+
+
+FIXED_REPORTS = ("betterleaks.json", "opengrep.sarif", "trivy.sarif", "sbom.cdx.json", SUMMARY_FILE)
+
+
+def report_files(out: Path) -> List[Path]:
+    """The files of out that a scan writes and upload_plan picks up, whatever their content."""
+    if not out.is_dir():
+        return []
+    return sorted(
+        path
+        for path in out.iterdir()
+        if path.is_file()
+        and (
+            path.name in FIXED_REPORTS
+            or IMAGE_SARIF.match(path.name)
+            or IMAGE_SBOM.match(path.name)
+            or MOBSF_REPORT.match(path.name)
+        )
+    )
 
 
 def _betterleaks_report(path: Path) -> bool:
@@ -176,9 +209,11 @@ def count(out: Path, ignore_unfixed: bool = False) -> Counts:
         elif path.name.endswith(".sarif"):
             counts.add(path.name, *sarif_counts(load_json(path)))
         elif path.name == "betterleaks.json":
-            # A committed secret is always severe; the template counts every finding.
+            # A committed secret is always severe, except a Firebase app's client key; the
+            # templates count the same.
             findings = load_json(path)
-            counts.add(path.name, 0, len(findings) if isinstance(findings, list) else 0)
+            severe = [f for f in findings if not is_firebase_client_key(f)] if isinstance(findings, list) else []
+            counts.add(path.name, 0, len(severe))
     return counts
 
 
