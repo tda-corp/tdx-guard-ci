@@ -1486,7 +1486,7 @@ jobs:
     outputs:
       rows: ${{ steps.push.outputs.rows }}
     env:
-      BETTERLEAKS_VERSION: "1.8.1"
+      BETTERLEAKS_VERSION: "1.9.0"
       # The severe secrets: all of them but a Firebase app's client key, which ships in the
       # app by design (FIREBASE_CONFIG_PATTERN in cli/tdxguard/engine/scan.py; a test fails
       # when they differ). It is still pushed to TDxGuard, as Low.
@@ -1668,7 +1668,7 @@ jobs:
     outputs:
       rows: ${{ steps.push.outputs.rows }}
     env:
-      OPENGREP_VERSION: "1.29.0"
+      OPENGREP_VERSION: "1.31.0"
       OPENGREP_RULES_SHA: "f1d2b562b414783763fd02a6ed2736eaed622efa"
       # The opengrep-rules languages whose security/ rules are loaded, and the rule-id roots
       # sarif-enrich.py trims to. The same list as RULE_LANGUAGES in the CLI
@@ -1855,7 +1855,12 @@ jobs:
       rows: ${{ steps.push.outputs.rows }}
       image_hint: ${{ steps.dockerfiles.outputs.hint }}
     env:
-      TRIVY_VERSION: "0.74.0"
+      TRIVY_VERSION: "0.76.0"
+      # Trivy gives up after 5 minutes by default ("context deadline exceeded"), which an
+      # image of a few GB read out of the Docker daemon does not make on a busy runner.
+      TRIVY_TIMEOUT: "30m"
+      # The version is pinned on purpose; the "a newer Trivy is available" notice is noise.
+      TRIVY_SKIP_VERSION_CHECK: "true"
     steps:
       - uses: actions/checkout@v7
       # The helper scripts from the tools job, unpacked outside the checkout so that they are
@@ -1886,7 +1891,7 @@ jobs:
       # had not read a line of the code.
       #
       # 0.58.1 is not the pinned version any more: Aqua has deleted the release assets for
-      # it, so there is no binary left to download. 0.74.0 is the version this was verified
+      # it, so there is no binary left to download. 0.76.0 is the version this was verified
       # against — SARIF and CycloneDX both parse, and CycloneDX 1.7 is accepted (SecObserve
       # keys off bomFormat, not the spec version).
       - name: Fetch Trivy (pinned binary)
@@ -2016,7 +2021,12 @@ jobs:
       rows: ${{ steps.push.outputs.rows }}
     if: inputs.dockerfile != '' || inputs.image_ref != ''
     env:
-      TRIVY_VERSION: "0.74.0"
+      TRIVY_VERSION: "0.76.0"
+      # Trivy gives up after 5 minutes by default ("context deadline exceeded"), which an
+      # image of a few GB read out of the Docker daemon does not make on a busy runner.
+      TRIVY_TIMEOUT: "30m"
+      # The version is pinned on purpose; the "a newer Trivy is available" notice is noise.
+      TRIVY_SKIP_VERSION_CHECK: "true"
     steps:
       - uses: actions/checkout@v7
       # The helper scripts from the tools job, unpacked outside the checkout so that they are
@@ -2242,7 +2252,7 @@ jobs:
       rows: ${{ steps.push.outputs.rows }}
     if: inputs.app_start_command != ''
     env:
-      NUCLEI_VERSION: "3.4.10"
+      NUCLEI_VERSION: "3.11.1"
     steps:
       - uses: actions/checkout@v7
       # The helper scripts from the tools job, unpacked outside the checkout so that they are
@@ -2323,7 +2333,7 @@ jobs:
               # -I: warnings do not make ZAP exit non-zero, the gate lives in TDxGuard.
               docker rm -f tdxguard-zap >/dev/null 2>&1 || true
               docker run --name tdxguard-zap --network host \
-                ghcr.io/zaproxy/zaproxy:2.16.1 \
+                ghcr.io/zaproxy/zaproxy:2.17.0 \
                 "$ZAP_SCRIPT" -t "$ZAP_TARGET" -J zap.json -I \
                 || echo "::warning::ZAP exited with an error."
               docker cp tdxguard-zap:/zap/wrk/zap.json zap.json \
@@ -2466,7 +2476,7 @@ jobs:
 
       - name: Download the app built by an earlier job
         if: inputs.mobile_app_artifact != ''
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: ${{ inputs.mobile_app_artifact }}
           path: ${{ runner.temp }}/tdxguard-mobile-app
