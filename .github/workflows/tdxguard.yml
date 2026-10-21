@@ -231,9 +231,16 @@ on:
 # the scans of main in all the others. github.ref differs between a push
 # (refs/heads/<branch>) and a pull request (refs/pull/<n>/merge), so a pull request's run
 # and its branch's run do not fight each other.
+#
+# A run that has already started is cancelled on a pull request only. On a pushed branch
+# (main) it runs to the end: the image scan builds every Dockerfile first, which takes
+# half an hour on a large project, and a repository that pushes to main every few minutes
+# cancelled each run before Trivy ever started — the default branch was never scanned.
+# Waiting runs are still superseded either way: GitHub keeps one pending run per group and
+# cancels the older one, so a burst of pushes queues one scan, not one per push.
 concurrency:
   group: tdxguard-${{ github.repository }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'pull_request_target' }}
 
 permissions:
   contents: read
