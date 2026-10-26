@@ -12,14 +12,17 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import yaml
 
+from tdxguard.dast import MODES as DAST_MODES
+from tdxguard.dast import Dast, is_local
 from tdxguard.engine.scan import VENDORED_DIRS
 from tdxguard.errors import ConfigError
 
 CONFIG_FILE = ".tdxguard.yml"
-TOP_LEVEL_KEYS = ("project", "repository", "engine", "exclude", "images", "mobile", "gate")
+TOP_LEVEL_KEYS = ("project", "repository", "engine", "exclude", "images", "mobile", "dast", "gate")
 IMAGE_KEYS = ("dockerfile", "context", "name", "ref")
 MOBILE_KEYS = ("app", "source", "path")
 MOBILE_PLATFORMS = ("android", "ios")
+DAST_KEYS = ("target", "api", "auth_command", "auth_header", "mode", "nuclei", "allow_full_on_remote")
 ENGINES = ("auto", "docker", "native")
 GATE_KEYS = ("critical", "high", "ignore_unfixed")
 SLUG_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
@@ -67,6 +70,8 @@ class Config:
     exclude: List[str] = field(default_factory=list)
     images: List[Image] = field(default_factory=list)
     mobile: List[MobileApp] = field(default_factory=list)
+    dast: Optional[Dast] = None
+    allow_full_on_remote: bool = False
     gate: Dict[str, Optional[int]] = field(default_factory=dict)
     engine: Optional[str] = None  # auto, docker or native; None: not set in the file
     # Count only vulnerabilities with a fixed version, like CI's `trivy --ignore-unfixed`.
@@ -152,6 +157,7 @@ def parse(data: Any, root: Optional[Path] = None) -> Config:
     exclude = _parse_exclude(data.get("exclude"))
     images = _parse_images(data.get("images"), root)
     mobile = _parse_mobile(data.get("mobile"))
+    dast, allow_full_on_remote = _parse_dast(data.get("dast"))
     gate, ignore_unfixed = _parse_gate(data.get("gate"))
 
     return Config(
@@ -160,6 +166,8 @@ def parse(data: Any, root: Optional[Path] = None) -> Config:
         exclude=exclude,
         images=images,
         mobile=mobile,
+        dast=dast,
+        allow_full_on_remote=allow_full_on_remote,
         gate=gate,
         engine=engine,
         ignore_unfixed=ignore_unfixed,
@@ -283,6 +291,64 @@ def _check_unique(images: List[Image], name: str, where: str) -> None:
             f"{_where(where + '.name')}: the name {name!r} is used twice",
             "Give one of the images an explicit name.",
         )
+
+
+def check_dast_target(value: Any, where: str = "dast.target") -> str:
+    if not isinstance(value, str) or not value.strip().startswith(("http://", "https://")):
+        raise ConfigError(f"{_where(where)}: must be an http:// or https:// URL, such as http://localhost:8000")
+    return value.strip()
+
+
+def check_dast_mode(mode: Any, target: str, allow_full_on_remote: bool, where: str = "dast.mode") -> str:
+    """`full` attacks: it writes and deletes through every form and API it finds."""
+    if mode not in DAST_MODES:
+        raise ConfigError(f"{_where(where)}: must be baseline or full, not {mode!r}")
+    if mode == "full" and not is_local(target) and not allow_full_on_remote:
+        raise ConfigError(
+            f"{_where(where)}: full is an attack, and {target} is not this machine",
+            "Point it at an application you started locally, or, for a test environment you own, set "
+            "allow_full_on_remote: true under dast:. Never production data.",
+        )
+    return mode
+
+
+def _parse_dast(value: Any) -> Tuple[Optional[Dast], bool]:
+    """`dast:` the running application ZAP (and Nuclei) scan; see tdxguard/dast.py."""
+    if value is None:
+        return None, False
+    if not isinstance(value, dict):
+        raise ConfigError(f"{_where('dast')}: must be a mapping such as {{target: http://localhost:8000}}")
+    unknown = [str(k) for k in value if k not in DAST_KEYS]
+    if unknown:
+        raise ConfigError(f"{_where('dast.' + unknown[0])}: unknown key", f"Allowed: {', '.join(DAST_KEYS)}.")
+    if "target" not in value:
+        raise ConfigError(f"{_where('dast.target')}: is required (the URL of the running application)")
+    target = check_dast_target(value["target"])
+    allow = value.get("allow_full_on_remote", False)
+    if not isinstance(allow, bool):
+        raise ConfigError(f"{_where('dast.allow_full_on_remote')}: must be true or false")
+    nuclei = value.get("nuclei", False)
+    if not isinstance(nuclei, bool):
+        raise ConfigError(f"{_where('dast.nuclei')}: must be true or false")
+    api = value.get("api")
+    if api is not None:
+        if not isinstance(api, str) or not api.strip():
+            raise ConfigError(f"{_where('dast.api')}: must be a URL or a path of the repository")
+        api = api.strip() if api.strip().startswith(("http://", "https://")) else _check_relative_path(api, "dast.api")
+    for key in ("auth_command", "auth_header"):
+        if value.get(key) is not None and (not isinstance(value[key], str) or not value[key].strip()):
+            raise ConfigError(f"{_where('dast.' + key)}: must be a non-empty string")
+    return (
+        Dast(
+            target=target,
+            api=api,
+            auth_command=value.get("auth_command"),
+            auth_header=(value.get("auth_header") or "Authorization").strip(),
+            mode=check_dast_mode(value.get("mode", "baseline"), target, allow),
+            nuclei=nuclei,
+        ),
+        allow,
+    )
 
 
 def _parse_gate(value: Any) -> Tuple[Dict[str, Optional[int]], bool]:
@@ -414,6 +480,17 @@ def render(
             "#  - app: app/build/outputs/apk/release/app-release.apk",
             "#  - source: android      # or ios, with path: <project directory>",
         ]
+    lines += [
+        "",
+        "# DAST: ZAP (and Nuclei) in Docker against the application once you started it (docker compose up).",
+        "# Or on the command line: tdxguard scan --dast http://localhost:8000",
+        "# dast:",
+        "#   target: http://localhost:8000",
+        "#   api: docs/openapi.yaml           # every operation of the API, not only what links lead to",
+        '#   auth_command: ./scripts/zap-token.sh   # prints e.g. "Bearer <token>" of a TEST user',
+        "#   mode: baseline                   # full attacks: writes and deletes, local targets only",
+        "#   nuclei: true",
+    ]
     lines += [
         "",
         "# `tdxguard scan` exits with 1 when a count is exceeded; null means no limit.",

@@ -145,9 +145,10 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument(
         "--skip",
         action="append",
-        choices=SCANNERS + ("mobile",),
+        choices=SCANNERS + ("mobile", "dast"),
         metavar="SCANNER",
-        help=f"skip a scanner: {', '.join(SCANNERS + ('mobile',))} (mobile: MobSF, see mobile: in .tdxguard.yml)",
+        help=f"skip a scanner: {', '.join(SCANNERS + ('mobile', 'dast'))} (mobile: MobSF, see mobile: in "
+        ".tdxguard.yml; dast: ZAP and Nuclei, see dast:)",
     )
     images = scan.add_mutually_exclusive_group()
     images.add_argument("--image-only", action="store_true", help="scan only the images")
@@ -162,6 +163,26 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="OPTS",
         help='git log options for --secrets-mode git, e.g. --log-opts="--since=2025-01-01" (note the =)',
     )
+    dast = scan.add_argument_group(
+        "DAST",
+        "ZAP (and Nuclei) in Docker against an application you started, such as `docker compose up`. "
+        "Overrides dast: in .tdxguard.yml; --dast alone is enough to start.",
+    )
+    dast.add_argument("--dast", metavar="URL", help="URL of the running application, e.g. http://localhost:8000")
+    dast.add_argument(
+        "--dast-api", metavar="SPEC", help="OpenAPI definition (URL or file): ZAP requests every operation of it"
+    )
+    dast.add_argument(
+        "--dast-auth-command",
+        metavar="CMD",
+        help="prints the sign-in header value, e.g. 'echo \"Bearer $(./get-token.sh)\"'; use a TEST account",
+    )
+    dast.add_argument(
+        "--dast-mode",
+        choices=("baseline", "full"),
+        help="baseline (default): passive; full: attacks, writes and deletes, local targets only",
+    )
+    dast.add_argument("--nuclei", action="store_true", help="also run Nuclei (known CVEs, exposed panels)")
     scan.add_argument("--keep", metavar="DIR", help="write the reports to DIR (default: ~/.cache/tdxguard/reports)")
     scan.add_argument("--json", action="store_true", help="print the result as JSON on stdout")
 

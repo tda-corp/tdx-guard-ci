@@ -41,7 +41,7 @@ class TestArguments(unittest.TestCase):
             ["opengrep", "trivy"], commands.resolve_skips(self.parse(["scan", "--skip", "opengrep", "--skip", "trivy"]))
         )
         self.assertEqual(
-            ["betterleaks", "opengrep", "trivy", "zizmor", "mobile"],
+            ["betterleaks", "opengrep", "trivy", "zizmor", "mobile", "dast"],
             commands.resolve_skips(self.parse(["scan", "--image-only"])),
         )
         self.assertEqual(

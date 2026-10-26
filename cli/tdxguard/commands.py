@@ -27,6 +27,7 @@ from tdxguard import (
     config,
     coverage,
     credentials,
+    dast,
     docker,
     gitinfo,
     oidc,
@@ -556,10 +557,37 @@ def imports_licenses(branch: str, sbom: bool) -> bool:
 def resolve_skips(args: argparse.Namespace) -> List[str]:
     skips = list(dict.fromkeys(args.skip or []))
     if args.image_only:
-        skips = ["betterleaks", "opengrep", "trivy", "zizmor", "mobile"]
+        skips = ["betterleaks", "opengrep", "trivy", "zizmor", "mobile", "dast"]
     if args.no_images and "image" not in skips:
         skips.append("image")
     return skips
+
+
+def resolve_dast(args: argparse.Namespace, cfg: config.Config) -> Optional[dast.Dast]:
+    """dast: of .tdxguard.yml with the --dast flags on top; None when there is nothing to scan."""
+    target = getattr(args, "dast", None)
+    base = cfg.dast
+    if target is None and base is None:
+        for flag in ("dast_api", "dast_auth_command", "dast_mode"):
+            if getattr(args, flag, None):
+                raise ConfigError(
+                    f"--{flag.replace('_', '-')} needs a target.",
+                    f"Give --dast URL, or set dast: target: in {config.CONFIG_FILE}.",
+                )
+        if getattr(args, "nuclei", False):
+            raise ConfigError("--nuclei needs a target.", "Give --dast URL.")
+        return None
+    url = config.check_dast_target(target, "--dast") if target else base.target  # type: ignore[union-attr]
+    result = dast.Dast(
+        target=url,
+        api=getattr(args, "dast_api", None) or (base.api if base else None),
+        auth_command=getattr(args, "dast_auth_command", None) or (base.auth_command if base else None),
+        auth_header=base.auth_header if base else "Authorization",
+        mode=getattr(args, "dast_mode", None) or (base.mode if base else "baseline"),
+        nuclei=bool(getattr(args, "nuclei", False) or (base.nuclei if base else False)),
+    )
+    result.mode = config.check_dast_mode(result.mode, url, cfg.allow_full_on_remote, "--dast-mode")
+    return result
 
 
 def resolve_engine(
@@ -630,6 +658,7 @@ def cmd_scan(args: argparse.Namespace, ui: UI) -> int:  # noqa: C901
         raise ConfigError(f"--image-only, but {config.CONFIG_FILE} lists no images.")
     if args.log_opts and args.secrets_mode != "git":
         raise ConfigError("--log-opts applies to --secrets-mode git only.")
+    dast_target = resolve_dast(args, cfg) if "dast" not in skips else None
     docker_available = _DockerProbe()
     scanner_image = os.environ.get("TDXGUARD_SCANNER_IMAGE") or DEFAULT_SCANNER_IMAGE
 
@@ -730,7 +759,7 @@ def cmd_scan(args: argparse.Namespace, ui: UI) -> int:  # noqa: C901
             excludes=excludes,
             images=images,
             remote_images=remote_images,
-            skips=[s for s in skips if s != "mobile"],
+            skips=[s for s in skips if s not in ("mobile", "dast")],
             secrets_mode=args.secrets_mode,
             log_opts=args.log_opts,
         )
@@ -739,7 +768,7 @@ def cmd_scan(args: argparse.Namespace, ui: UI) -> int:  # noqa: C901
         missing_hint = f"Run with -v to see its output. Is {scanner_image} available (docker pull {scanner_image})?"
     else:
         assert toolset is not None  # nosec B101
-        engine_skips = [s for s in skips if s != "mobile"]
+        engine_skips = [s for s in skips if s not in ("mobile", "dast")]
         code, tail = _run_native(args, toolset, root, out, excludes, images, remote_images, engine_skips, trivy_cache)
         missing_hint = "Run with -v to see the scanners' output."
 
@@ -757,6 +786,10 @@ def cmd_scan(args: argparse.Namespace, ui: UI) -> int:  # noqa: C901
     if cfg.mobile and "mobile" not in skips:
         scanner_errors += _scan_mobile(ui, cfg, root, out, summary, docker_available)
 
+    # 2c. DAST, with ZAP (and Nuclei) in Docker against the running application.
+    if dast_target:
+        scanner_errors += _scan_dast(ui, dast_target, root, out, summary, docker_available)
+
     # 3. Summary.
     counts = reports.count(out, ignore_unfixed=cfg.ignore_unfixed)
     _print_summary(ui, summary, out, scanner_errors, engine)
@@ -767,7 +800,16 @@ def cmd_scan(args: argparse.Namespace, ui: UI) -> int:  # noqa: C901
     if not args.no_upload and client and creds:
         branch = args.branch or branch_name(username, gitinfo.current_branch(root))
         upload_result, upload_failed = _upload(
-            ui, client, creds, cfg, root, out, image_refs, branch, imports_licenses(branch, args.sbom)
+            ui,
+            client,
+            creds,
+            cfg,
+            root,
+            out,
+            image_refs,
+            branch,
+            imports_licenses(branch, args.sbom),
+            dast_target.target if dast_target else None,
         )
 
     # 5. Gate.
@@ -841,11 +883,36 @@ def _scan_mobile(
     return errors
 
 
+def _scan_dast(
+    ui: UI, target: dast.Dast, root: Path, out: Path, summary: Dict[str, Any], docker_available: Callable[[], bool]
+) -> List[str]:
+    """ZAP (and Nuclei) against the running application; their rows join the scanners' summary."""
+    if not docker_available():
+        message = (
+            f"ZAP runs in Docker, which is not available here: {target.target} is not scanned. "
+            "Start Docker, or skip it with --skip dast."
+        )
+        ui.warn(message)
+        summary.setdefault("warnings", []).append(message)
+        return []
+    signed = " signed in" if target.auth_command else ""
+    ui.step(f"DAST{signed}: ZAP {target.mode} scan of {target.target}" + (" and Nuclei" if target.nuclei else ""))
+    if target.mode == "full":
+        ui.warn("full mode attacks the application: it writes and deletes data through every form and API it finds.")
+    rows, errors = dast.scan(target, root, out, log=ui.info)
+    summary.setdefault("rows", []).extend(rows)
+    return errors
+
+
 def _native_tools(ui: UI) -> tools.Toolset:
     """The native engine's tools, downloaded and verified on first use."""
     platform = tools.detect_platform()
     root = tools.tools_dir()
-    if any(tools.installed(tool, platform, root) is None for tool in tools.TOOLS.values()):
+    if any(
+        tools.installed(tool, platform, root) is None
+        for tool in tools.TOOLS.values()
+        if tool.required or tool.available_for(platform)
+    ):
         ui.step(f"Installing the scanner tools into {root} (once)")
     return tools.ensure(platform, root, log=ui.info)
 
@@ -951,6 +1018,7 @@ def _upload(
     image_refs: Dict[str, str],
     branch: str,
     licenses: bool,
+    dast_target: Optional[str] = None,
 ) -> Tuple[Dict[str, Any], bool]:
     ui.out("")
     ui.step(f"Uploading to {creds.server}")
@@ -975,7 +1043,7 @@ def _upload(
     uploaded = []
     if not licenses:
         ui.info("The components and licenses of the SBOM are not imported for a local scan (--sbom imports them).")
-    for item in reports.upload_plan(out, image_refs):
+    for item in reports.upload_plan(out, image_refs, dast_target):
         try:
             result = client.upload(str(item.path), item.fields(cfg.project, branch, licenses=licenses))
             uploaded.append({"report": item.path.name, "parser": item.parser, **(result or {})})
