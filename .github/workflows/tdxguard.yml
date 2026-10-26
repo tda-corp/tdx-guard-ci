@@ -78,6 +78,18 @@ on:
         required: false
         type: boolean
         default: false
+      secrets_history:
+        description: >-
+          On the default branch, scan the WHOLE git history for secrets and push that as the
+          secrets report, instead of only the commits of the push. A secret that was committed
+          and later deleted is still in the history, readable by anyone with a clone, and only
+          a scan of the history finds it. The job's own gate (fail_on_critical) keeps counting
+          the new commits only, so an old secret shows in TDxGuard without turning every
+          pipeline red: rotate it, then close the finding there. Pull requests and other
+          branches scan their new commits either way.
+        required: false
+        type: boolean
+        default: true
       sbom_on_pull_requests:
         description: >-
           Also import the SBOM's components and licenses on pull requests. Off by default: a
@@ -173,6 +185,33 @@ on:
         required: false
         type: string
         default: "baseline"
+      zap_api_definition:
+        description: >-
+          OpenAPI definition of the application's API, a URL or a file in the repository
+          (e.g. docs/openapi.yaml). ZAP then runs its API scan, which requests every operation
+          of the definition, instead of a spider that only follows links: an API behind a
+          single-page app has no links to follow, and the spider finds next to nothing.
+          zap_target stays the base URL the requests go to. With zap_mode "baseline" the API
+          scan is passive (-S), with "full" it attacks every operation.
+        required: false
+        type: string
+        default: ""
+      zap_auth_command:
+        description: >-
+          Command printing the value of the header that authenticates ZAP's (and Nuclei's)
+          requests, run once the application is up, e.g. one that signs in a test user
+          through the API and prints "Bearer <token>". Its last line of output is the value.
+          Without it ZAP only sees what an anonymous visitor sees, while the findings that
+          matter most sit behind the login. Use a test account of the CI's own application,
+          never a real one: in "full" mode ZAP changes and deletes whatever that account may.
+        required: false
+        type: string
+        default: ""
+      zap_auth_header:
+        description: "Header that carries zap_auth_command's value"
+        required: false
+        type: string
+        default: "Authorization"
       nuclei:
         description: >-
           Also run Nuclei against zap_target. Thousands of community templates for known
@@ -827,17 +866,57 @@ jobs:
               return files
 
 
+          def below(directory: str, pattern: str) -> str:
+              """An include pattern of a rule, limited to a directory: "*.html" -> "apps/api/**/*.html"."""
+              pattern = pattern.strip().strip("\"'").lstrip("/")
+              return f"{directory}/{pattern}" if pattern.startswith("**/") else f"{directory}/**/{pattern}"
+
+
+          def is_item(line: str, deeper_than: int) -> bool:
+              """A YAML list item indented more than `deeper_than` spaces."""
+              return line.lstrip().startswith("- ") and len(line) - len(line.lstrip()) > deeper_than
+
+
           def confine(text: str, directories: list[str]) -> str:
-              # Insert `paths.include` under every `- id:` of the file, at the rule's own indent.
-              out = []
-              for line in text.splitlines():
-                  out.append(line)
-                  match = RULE_ID.match(line)
-                  if match:
-                      indent = match.group(1) + "  "
+              # Limit every rule of the file to the directories, at the rule's own indent. A rule that
+              # has a `paths:` of its own keeps it: a second `paths:` key is a duplicate key, and
+              # Opengrep then rejects the whole configuration and scans nothing at all (exit 7, which
+              # the scan step took for a warning). django-no-csrf-token has `include: ["*.html"]`, and a
+              # Django API in a subdirectory, tda-plane's apps/api/, had no SAST for that reason. Its
+              # include patterns are moved below each directory instead ("apps/api/**/*.html"):
+              # include patterns are alternatives, so a second list would widen the rule, not narrow it.
+              lines = text.splitlines()
+              starts = [i for i, line in enumerate(lines) if RULE_ID.match(line)]
+              out = lines[: starts[0]] if starts else lines
+              for n, start in enumerate(starts):
+                  block = lines[start : starts[n + 1] if n + 1 < len(starts) else len(lines)]
+                  indent = RULE_ID.match(block[0]).group(1) + "  "
+                  paths = next((i for i, line in enumerate(block) if line == f"{indent}paths:"), None)
+                  if paths is None:
+                      out.append(block[0])
                       out.append(f"{indent}paths:")
                       out.append(f"{indent}  include:")
                       out += [f'{indent}  - "{directory}/**"' for directory in directories]
+                      out += block[1:]
+                      continue
+                  include = next(
+                      (i for i in range(paths + 1, len(block)) if block[i] == f"{indent}  include:"),
+                      None,
+                  )
+                  if include is None:
+                      out += block[: paths + 1]
+                      out.append(f"{indent}  include:")
+                      out += [f'{indent}    - "{directory}/**"' for directory in directories]
+                      out += block[paths + 1 :]
+                      continue
+                  out += block[: include + 1]
+                  i = include + 1
+                  while i < len(block) and is_item(block[i], deeper_than=len(indent) + 2):
+                      item_indent = block[i][: len(block[i]) - len(block[i].lstrip())]
+                      pattern = block[i].lstrip()[2:]
+                      out += [f'{item_indent}- "{below(directory, pattern)}"' for directory in directories]
+                      i += 1
+                  out += block[i:]
               return "\n".join(out) + "\n"
 
 
@@ -1356,6 +1435,247 @@ jobs:
           if __name__ == "__main__":
               sys.exit(main())
           TDXGUARD_SCRIPT_EOF
+          cat > tdxguard-rules.yaml <<'TDXGUARD_SCRIPT_EOF'
+          # TDxGuard's own Opengrep rules, loaded next to the security rules of opengrep-rules.
+          #
+          # Each rule comes from a finding that a manual assessment of a product made and the community
+          # rules missed (October 2026, a Laravel + Next.js product): what the assessment found by
+          # reading the code, written down so that every scan finds it from now on. A rule belongs here
+          # only when it is a security problem on its own, not a style preference, and when its test
+          # cases in cli/tests/fixtures/tdxguard_rules/ hold.
+          #
+          # This file is the one source. Both CI templates embed a byte-identical copy as
+          # `tdxguard-rules.yaml` (tests/test_helpers_in_sync.py fails when one drifts); the scan puts
+          # it into ogrules-security/tdxguard-rules/, so the rule ids read "tdxguard-rules.<id>" once
+          # sarif-enrich.py has trimmed them.
+
+          rules:
+            - id: php.laravel-artisan-command-over-http
+              languages: [php]
+              severity: ERROR
+              message: >-
+                An HTTP endpoint runs the Artisan command $CMD. Whoever reaches the URL runs it,
+                and so do crawlers and chat clients unfurling a pasted link: a GET route is fetched
+                by every link preview. A migration started this way can run halfway through a deploy,
+                and the response names the migrations. Run migrations and maintenance commands from the
+                deployment (a Cloud Run job, a CI step, a release phase), and remove the route.
+              metadata:
+                category: security
+                cwe: ["CWE-306: Missing Authentication for Critical Function"]
+                owasp: ["A01:2021 - Broken Access Control"]
+                confidence: HIGH
+                references:
+                  - https://laravel.com/docs/migrations#running-migrations
+              paths:
+                include:
+                  - "**/routes/**"
+                  - "**/app/Http/**"
+              patterns:
+                - pattern-either:
+                    - pattern: Artisan::call($CMD, ...)
+                    - pattern: Artisan::queue($CMD, ...)
+                    - pattern: \Illuminate\Support\Facades\Artisan::call($CMD, ...)
+                    - pattern: \Artisan::call($CMD, ...)
+                - metavariable-regex:
+                    metavariable: $CMD
+                    regex: ^['"](migrate|db:|schema:|key:generate|down\b|up\b|optimize|config:|cache:|route:|queue:|storage:|tinker)
+
+            - id: php.laravel-request-body-logged
+              languages: [php]
+              severity: WARNING
+              message: >-
+                The whole request body reaches a log. Every field the client sends lands in the logs
+                as it is, nested ones included: names, dates of birth, passwords, tokens. Log the
+                fields you need by name ($request->only([...])), or mask the body recursively first.
+              metadata:
+                category: security
+                cwe: ["CWE-532: Insertion of Sensitive Information into Log File"]
+                owasp: ["A09:2021 - Security Logging and Monitoring Failures"]
+                confidence: MEDIUM
+              mode: taint
+              pattern-sources:
+                - pattern: $REQ->all()
+                - pattern: $REQ->input()
+                - pattern: $REQ->json()->all()
+                - pattern: request()->all()
+                - pattern: $REQ->getContent()
+              pattern-sanitizers:
+                - pattern: $REQ->only(...)
+              pattern-sinks:
+                - pattern: Log::$LEVEL(...)
+                - pattern: \Log::$LEVEL(...)
+                - pattern: Log::channel(...)->$LEVEL(...)
+                - pattern: logger(...)
+                - pattern: info(...)
+                - pattern: $LOGGER->log(...)
+
+            - id: php.exception-details-in-response
+              languages: [php]
+              severity: WARNING
+              message: >-
+                The file, line or stack trace of an exception goes into an HTTP response. It shows the
+                server's directory layout and code to anyone who can trigger an error, and an SQL error
+                message hands out the query. Return a generic message and an error id, log the
+                details, and show them only when config('app.debug') is on.
+              metadata:
+                category: security
+                cwe: ["CWE-209: Generation of Error Message Containing Sensitive Information"]
+                owasp: ["A05:2021 - Security Misconfiguration"]
+                confidence: MEDIUM
+              mode: taint
+              pattern-sources:
+                - patterns:
+                    - pattern-either:
+                        - pattern: $E->getFile()
+                        - pattern: $E->getLine()
+                        - pattern: $E->getTrace()
+                        - pattern: $E->getTraceAsString()
+                    # Shown only in debug mode or outside production: config('app.debug'),
+                    # config('const.app_env'), env('APP_ENV'), app()->environment('local'), ...
+                    - pattern-not-inside: |
+                        if (<... config("=~/(?i)(debug|env)/") ...>) { ... }
+                    - pattern-not-inside: |
+                        if (<... env("=~/(?i)(debug|env)/") ...>) { ... }
+                    - pattern-not-inside: |
+                        if (<... $APP->environment(...) ...>) { ... }
+                    - pattern-not-inside: |
+                        if (<... App::environment(...) ...>) { ... }
+                    - pattern-not-inside: |
+                        if (<... app()->hasDebugModeEnabled() ...>) { ... }
+                    - pattern-not-inside: |
+                        <... config("=~/(?i)(debug|env)/") ...> ? $A : $B
+              pattern-sinks:
+                - pattern: response()->json(...)
+                - pattern: response(...)
+                - pattern: Response::json(...)
+                - pattern: new JsonResponse(...)
+                - pattern: new \Illuminate\Http\JsonResponse(...)
+
+            - id: javascript.sentry-send-default-pii
+              languages: [javascript, typescript]
+              severity: WARNING
+              message: >-
+                Sentry is told to send personal data: with sendDefaultPii the events carry the user's
+                IP address, cookies, request headers and the logged-in user. That data then lives at
+                Sentry, outside the product's own data protection. Leave sendDefaultPii off and attach
+                only a pseudonymous user id.
+              metadata:
+                category: security
+                cwe: ["CWE-359: Exposure of Private Personal Information to an Unauthorized Actor"]
+                confidence: HIGH
+                references:
+                  - https://docs.sentry.io/platforms/javascript/configuration/options/#sendDefaultPii
+              pattern-either:
+                - pattern: |
+                    $SENTRY.init({..., sendDefaultPii: true, ...})
+                - pattern: |
+                    init({..., sendDefaultPii: true, ...})
+
+            - id: javascript.sentry-replay-unmasked
+              languages: [javascript, typescript]
+              severity: WARNING
+              message: >-
+                Sentry's session replay records the page with its text or media unmasked: every name,
+                address and medical detail on screen ends up in the recording. Keep maskAllText and
+                blockAllMedia at their default (true) and unmask single elements where needed.
+              metadata:
+                category: security
+                cwe: ["CWE-359: Exposure of Private Personal Information to an Unauthorized Actor"]
+                confidence: HIGH
+                references:
+                  - https://docs.sentry.io/platforms/javascript/session-replay/privacy/
+              pattern-either:
+                - pattern: |
+                    $SENTRY.replayIntegration({..., maskAllText: false, ...})
+                - pattern: |
+                    replayIntegration({..., maskAllText: false, ...})
+                - pattern: |
+                    $SENTRY.replayIntegration({..., blockAllMedia: false, ...})
+                - pattern: |
+                    replayIntegration({..., blockAllMedia: false, ...})
+
+            - id: python.sentry-send-default-pii
+              languages: [python]
+              severity: WARNING
+              message: >-
+                Sentry is told to send personal data: with send_default_pii the events carry the
+                user's IP address, cookies, request headers and the logged-in user. That data then
+                lives at Sentry, outside the product's own data protection. Leave it off.
+              metadata:
+                category: security
+                cwe: ["CWE-359: Exposure of Private Personal Information to an Unauthorized Actor"]
+                confidence: HIGH
+              pattern: sentry_sdk.init(..., send_default_pii=True, ...)
+
+            - id: php.sentry-send-default-pii
+              languages: [php]
+              severity: WARNING
+              message: >-
+                Sentry is told to send personal data: with send_default_pii the events carry the
+                user's IP address, cookies, request headers and the logged-in user. That data then
+                lives at Sentry, outside the product's own data protection. Leave it off.
+              metadata:
+                category: security
+                cwe: ["CWE-359: Exposure of Private Personal Information to an Unauthorized Actor"]
+                confidence: HIGH
+              pattern: |
+                [..., 'send_default_pii' => true, ...]
+
+            - id: javascript.nextjs-image-any-remote-host
+              languages: [javascript, typescript]
+              severity: WARNING
+              message: >-
+                next/image may fetch images from any host: hostname "$HOST" in images.remotePatterns
+                turns /_next/image into an open proxy. Anyone can have the server fetch any URL
+                (server-side request forgery against internal addresses, bandwidth on your bill).
+                Name the hosts the images really come from.
+              metadata:
+                category: security
+                cwe: ["CWE-918: Server-Side Request Forgery (SSRF)"]
+                owasp: ["A10:2021 - Server-Side Request Forgery (SSRF)"]
+                confidence: HIGH
+                references:
+                  - https://nextjs.org/docs/app/api-reference/components/image#remotepatterns
+              paths:
+                include:
+                  - "**/next.config.*"
+              patterns:
+                - pattern-inside: |
+                    {..., remotePatterns: [...], ...}
+                - pattern: |
+                    {..., hostname: "$HOST", ...}
+                - metavariable-regex:
+                    metavariable: $HOST
+                    regex: ^\*{1,2}$
+
+            - id: yaml.github-actions-gcp-service-account-key
+              languages: [yaml]
+              severity: WARNING
+              message: >-
+                The workflow signs in to Google Cloud with a service account key (credentials_json).
+                The key is valid until someone deletes it, and whoever reads it, from a log, an
+                artifact or a compromised action, can use it from anywhere. Use Workload Identity
+                Federation (workload_identity_provider + service_account): the job gets a token that
+                expires within the hour and only this repository can obtain.
+              metadata:
+                category: security
+                cwe: ["CWE-798: Use of Hard-coded Credentials"]
+                confidence: HIGH
+                references:
+                  - https://github.com/google-github-actions/auth#preferred-direct-workload-identity-federation
+              paths:
+                include:
+                  - "**/.github/workflows/*"
+              patterns:
+                - pattern-inside: |
+                    uses: $ACTION
+                    ...
+                - pattern: |
+                    credentials_json: $KEY
+                - metavariable-regex:
+                    metavariable: $ACTION
+                    regex: ^google-github-actions/auth@
+          TDXGUARD_SCRIPT_EOF
           cat > tdxguard-lib.sh <<'TDXGUARD_SCRIPT_EOF'
           #!/usr/bin/env bash
           # tdxguard-lib.sh — the steps every scan job shares, sourced rather than executed:
@@ -1485,7 +1805,7 @@ jobs:
       - name: Hand the scripts to the other jobs
         id: bundle
         run: |
-          echo "value=$(tar czf - sarif-enrich.py zen-collector.py opengrep-prune-rules.py mobsf-scan.py tdxguard-lib.sh | base64 | tr -d '\n')" >> "$GITHUB_OUTPUT"
+          echo "value=$(tar czf - sarif-enrich.py zen-collector.py tdxguard-rules.yaml opengrep-prune-rules.py mobsf-scan.py tdxguard-lib.sh | base64 | tr -d '\n')" >> "$GITHUB_OUTPUT"
 
   betterleaks:
     runs-on: ${{ inputs.runs_on }}
@@ -1558,14 +1878,29 @@ jobs:
           tar -xzf "$RUNNER_TEMP/$TARBALL" -C "$RUNNER_TEMP" betterleaks
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
 
-      # IMPORTANT: scan only the NEW COMMITS, never the whole history.
+      # The GATE looks at the NEW COMMITS only, never at the whole history.
       # Git history is immutable: a repository that ever had a finding (a false positive
-      # included) stays RED forever if everything is scanned -> the team turns the scan
-      # off. A secret that made it into the history is handled by ROTATING it, not by a
-      # CI gate.
+      # included) stays RED forever if the gate counts everything -> the team turns the
+      # scan off. A secret that made it into the history is handled by ROTATING it, not by
+      # a CI gate.
+      #
+      # What TDxGuard receives is another matter. On the default branch the whole history
+      # is scanned as well (secrets_history) and that report is the one pushed: a .env
+      # committed long ago and emptied since is still in every clone, and a scan of
+      # new commits never sees it again. A manual assessment of a Laravel product found its
+      # .env.dev, .env.stg and .env.prod that way: emptied in the tree, intact in the history.
       - name: Determine the range to scan
         id: range
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          SECRETS_HISTORY: ${{ inputs.secrets_history }}
         run: |
+          HISTORY=false
+          if [ "$SECRETS_HISTORY" = "true" ] && [ "${{ github.event_name }}" != "pull_request" ] \
+             && [ -n "$DEFAULT_BRANCH" ] && [ "$GITHUB_REF_NAME" = "$DEFAULT_BRANCH" ]; then
+            HISTORY=true
+          fi
+          echo "history=$HISTORY" >> "$GITHUB_OUTPUT"
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             RANGE="${{ github.event.pull_request.base.sha }}..HEAD"
           else
@@ -1594,7 +1929,7 @@ jobs:
       # No code-scanning upload for secrets on purpose: a committed secret is a hard gate
       # failure with a clear message, and rendering its location in the Security tab adds
       # little while surfacing where the secret sits.
-      - name: Scan for committed secrets (new commits only)
+      - name: Scan for committed secrets
         env:
           # For a repository without a config of its own: the default rules, minus the
           # third-party code a dependency manager checked out into the repository. Its
@@ -1613,6 +1948,11 @@ jobs:
             description = "Lockfiles: checksums, not keys"
             targetRules = ["generic-api-key"]
             paths = ['''(?:^|/)(?:Podfile\.lock|pubspec\.lock|Package\.resolved|Cargo\.lock|go\.sum|composer\.lock|Gemfile\.lock|gradle\.lockfile|package-lock\.json|yarn\.lock|pnpm-lock\.yaml|poetry\.lock|Pipfile\.lock|packages\.lock\.json)$''']
+
+            [[allowlists]]
+            description = "Translation files: the word password, not a password"
+            targetRules = ["generic-password"]
+            paths = ['''(?:^|/)(?:locales?|i18n|l10n|translations?|lang)/(?:.+/)?[^/]+\.(?:json|ya?ml|po|pot|arb|strings|xliff|xlf|properties|[cm]?[jt]s)$''']
         run: |
           # An `if`, not `[ -f x ] && ...`: the && form returns 1 when the file is
           # absent, and the step runs under `bash -e`. Most repositories have no
@@ -1628,11 +1968,23 @@ jobs:
           # The GIT_CONFIG safe.directory dance that used to be here is gone with the
           # container: the scan and the checkout now run as the same user, so git has no
           # reason to call the repository dubious and refuse to read it.
+          # The new commits: what the gate counts.
           betterleaks git . \
             --log-opts="${{ steps.range.outputs.value }}" \
             $CFG \
-            -f json -r betterleaks.json \
+            -f json -r betterleaks-new.json \
             --exit-code 0 --redact --no-banner
+          # What TDxGuard receives: the whole history on the default branch, the new commits
+          # elsewhere. One report file either way, so it stays one check in TDxGuard.
+          if [ "${{ steps.range.outputs.history }}" = "true" ]; then
+            echo "Scanning the whole history of $GITHUB_REF_NAME ($(git rev-list --count HEAD) commits)"
+            betterleaks git . \
+              $CFG \
+              -f json -r betterleaks.json \
+              --exit-code 0 --redact --no-banner
+          else
+            cp betterleaks-new.json betterleaks.json
+          fi
       # Each job pushes its own reports; see tdxguard-lib.sh for why there are no artifacts.
       - name: Push the results to TDxGuard
         id: push
@@ -1648,16 +2000,21 @@ jobs:
           # leaves the open secrets alone, because an empty new-commit scan does not mean an
           # old secret in the history is gone (rotate it, then close the finding).
           tg_push betterleaks.json "parser_name=Betterleaks"
-          tg_row "Betterleaks (secrets)" betterleaks.json length "$SECRETS_SEVERE"
+          if [ "${{ steps.range.outputs.history }}" = "true" ]; then
+            tg_row "Betterleaks (secrets, whole history)" betterleaks.json length "$SECRETS_SEVERE"
+          else
+            tg_row "Betterleaks (secrets)" betterleaks.json length "$SECRETS_SEVERE"
+          fi
           tg_finish
 
       - name: Fail on committed secrets
         if: inputs.fail_on_critical
         run: |
-          # 0 from both shapes a clean scan produces, [] and null.
-          COUNT=$(jq "$SECRETS_SEVERE" betterleaks.json)
+          # The new commits only, also where the whole history was pushed (see the range
+          # step). 0 from both shapes a clean scan produces, [] and null.
+          COUNT=$(jq "$SECRETS_SEVERE" betterleaks-new.json)
           if [ "$COUNT" -ne 0 ]; then
-            echo "::error::Found $COUNT committed secret(s). Details in TDxGuard."
+            echo "::error::Found $COUNT secret(s) in the new commits. Details in TDxGuard."
             exit 1
           fi
 
@@ -1771,6 +2128,12 @@ jobs:
           done
           rm -rf ogrules-security/generic/secrets
 
+          # TDxGuard's own rules (tdxguard-rules.yaml from the tools job): what a manual
+          # assessment found and the community rules miss, such as an Artisan migration behind
+          # an HTTP route. Their directory is their rule-id root, see --rule-roots below.
+          mkdir -p ogrules-security/tdxguard-rules
+          cp "$TG/tdxguard-rules.yaml" ogrules-security/tdxguard-rules/
+
           # Fail loudly rather than scan with an empty ruleset. A zero-rule scan exits 0
           # and reports nothing, which is indistinguishable from clean code -- the exact
           # failure this pipeline has been bitten by before. The total (about 930 at the
@@ -1818,11 +2181,12 @@ jobs:
             --exclude='*.md' --exclude='*.example' \
             --exclude=ogrules --exclude=ogrules-security . || true
       # SecObserve uses the rule id as the finding title, and Opengrep's id carries the
-      # --config path ("ogrules.python.<rule>"). --rule-roots trims it to "python.<rule>".
+      # --config path ("ogrules.python.<rule>"). --rule-roots trims it to "python.<rule>", and
+      # TDxGuard's own rules to "tdxguard-rules.<rule>".
       # (Opengrep already embeds region.snippet, so this only rewrites the ids.)
       - name: Clean up Opengrep rule ids
         run: |
-          python3 "$TG/sarif-enrich.py" opengrep.sarif . --rule-roots "${OPENGREP_RULE_LANGUAGES// /,}" --context 5 --expand-context
+          python3 "$TG/sarif-enrich.py" opengrep.sarif . --rule-roots "${OPENGREP_RULE_LANGUAGES// /,},tdxguard-rules" --context 5 --expand-context
       - name: Push the results to TDxGuard
         id: push
         if: always()
@@ -1863,6 +2227,11 @@ jobs:
       image_hint: ${{ steps.dockerfiles.outputs.hint }}
     env:
       TRIVY_VERSION: "0.76.0"
+      # zizmor publishes no checksum file: the sha256 are the asset digests of the release,
+      # the same as in cli/tdxguard/engine/tools.py (a test fails when they differ).
+      ZIZMOR_VERSION: "1.31.1"
+      ZIZMOR_SHA256_X86_64: "d185f726bdaf92df78273217dfdd24ebcd6b0ef48cf3ce776ff5762b6e138c99"
+      ZIZMOR_SHA256_AARCH64: "37eebbd5762a44f262d94875431b14a6d2402991e90a685113ea97b8b41be833"
       # Trivy gives up after 5 minutes by default ("context deadline exceeded"), which an
       # image of a few GB read out of the Docker daemon does not make on a busy runner.
       TRIVY_TIMEOUT: "30m"
@@ -1973,6 +2342,54 @@ jobs:
       - name: Normalize the SARIF (unescape HTML, embed snippets)
         run: |
           python3 "$TG/sarif-enrich.py" trivy.sarif . --unescape-html
+      # The workflows themselves are infrastructure too, and the part of it that holds the
+      # deployment credentials: an action referenced by a tag its owner can move, a
+      # pull_request_target that checks out the pull request, an issue title expanded inside
+      # a shell script, a token persisted in .git/config. Trivy reads none of that; zizmor
+      # does. Only where the repository has workflows.
+      - name: Audit the GitHub Actions workflows (zizmor)
+        env:
+          # For a repository without a zizmor.yml of its own. The same text as
+          # ZIZMOR_DEFAULT_CONFIG in cli/tdxguard/engine/scan.py, where the reasons are (a
+          # test fails when they differ): a version tag is fine for every action.
+          ZIZMOR_DEFAULT_CONFIG: |
+            rules:
+              unpinned-uses:
+                config:
+                  policies:
+                    "*": ref-pin
+        run: |
+          if [ ! -d .github/workflows ]; then
+            echo "No .github/workflows: nothing for zizmor to audit."
+            exit 0
+          fi
+          case "$(uname -m)" in
+            x86_64)        ZARCH=x86_64;  ZSHA="$ZIZMOR_SHA256_X86_64" ;;
+            aarch64|arm64) ZARCH=aarch64; ZSHA="$ZIZMOR_SHA256_AARCH64" ;;
+            *) echo "::error::zizmor publishes no binary for $(uname -m)"; exit 1 ;;
+          esac
+          ZTAR="zizmor-${ZARCH}-unknown-linux-gnu.tar.gz"
+          # Only where curl knows it; see the betterleaks download.
+          RETRY_ALL=; curl -s --retry-all-errors -o /dev/null file:///dev/null 2>/dev/null && RETRY_ALL=--retry-all-errors
+          curl -sSfL --retry 5 $RETRY_ALL --retry-delay 2 -o "$RUNNER_TEMP/$ZTAR" \
+            "https://github.com/zizmorcore/zizmor/releases/download/v${ZIZMOR_VERSION}/$ZTAR"
+          echo "$ZSHA  $RUNNER_TEMP/$ZTAR" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$ZTAR" -C "$RUNNER_TEMP" zizmor
+          CFG=()
+          if [ ! -f zizmor.yml ] && [ ! -f zizmor.yaml ] && [ ! -f .github/zizmor.yml ] && [ ! -f .github/zizmor.yaml ]; then
+            printf '%s' "$ZIZMOR_DEFAULT_CONFIG" > "$RUNNER_TEMP/zizmor.yml"
+            CFG=(--config "$RUNNER_TEMP/zizmor.yml")
+          fi
+          # Offline: no token needed, and the online audits (known-vulnerable action
+          # versions, impostor commits) would make the result depend on the API's rate
+          # limit. --no-exit-codes: findings exit 0, only a failure of zizmor does not.
+          if ! "$RUNNER_TEMP/zizmor" --offline --no-progress --no-exit-codes --format sarif \
+               ${CFG[@]+"${CFG[@]}"} . > zizmor.sarif \
+             || ! jq -e .runs zizmor.sarif >/dev/null; then
+            echo "::error::zizmor failed; the workflows were not audited."
+            rm -f zizmor.sarif
+            exit 1
+          fi
       - name: Push the results to TDxGuard
         id: push
         if: always()
@@ -1991,6 +2408,8 @@ jobs:
           tg_push sbom.cdx.json "parser_name=CycloneDX" "suppress_licenses=$SUPPRESS_LICENSES"
           tg_row "Trivy (IaC)" trivy.sarif "$TG_SARIF_ALL" "$TG_SARIF_ERR"
           tg_row "Trivy (dependencies)" sbom.cdx.json "$TG_CDX_ALL" "$TG_CDX_SEV"
+          tg_push zizmor.sarif "parser_name=SARIF"
+          tg_row "zizmor (GitHub Actions)" zizmor.sarif "$TG_SARIF_ALL" "$TG_SARIF_ERR"
           tg_finish
       # Inline annotations on the pull request diff and the Security tab. The findings
       # already travel to TDxGuard; this only puts them where the developer is looking.
@@ -2302,6 +2721,9 @@ jobs:
           TRAFFIC_COMMAND: ${{ inputs.traffic_command }}
           ZAP_TARGET: ${{ inputs.zap_target }}
           ZAP_MODE: ${{ inputs.zap_mode }}
+          ZAP_API_DEFINITION: ${{ inputs.zap_api_definition }}
+          ZAP_AUTH_COMMAND: ${{ inputs.zap_auth_command }}
+          ZAP_AUTH_HEADER: ${{ inputs.zap_auth_header }}
           NUCLEI: ${{ inputs.nuclei }}
         run: |
           set -u
@@ -2322,12 +2744,52 @@ jobs:
             echo "::warning::The application never came up at $APP_HEALTH_URL — skipping IAST and DAST."
           else
             if [ -n "$ZAP_TARGET" ]; then
+              # Signed in: ZAP adds the header to every request to the target's host
+              # (ZAP_AUTH_HEADER_SITE), read from its environment by ZAP itself
+              # (HttpSenderAuthHeaderListener). Masked before anything can print it.
+              AUTH_VALUE=""
+              if [ -n "$ZAP_AUTH_COMMAND" ]; then
+                AUTH_VALUE=$(sh -c "$ZAP_AUTH_COMMAND" | tail -n 1 | tr -d '\r') \
+                  || echo "::warning::zap_auth_command returned an error."
+                if [ -n "$AUTH_VALUE" ]; then
+                  echo "::add-mask::$AUTH_VALUE"
+                  # The token alone too, as it appears in a log without its "Bearer ".
+                  case "$AUTH_VALUE" in *" "*) echo "::add-mask::${AUTH_VALUE#* }" ;; esac
+                  export ZAP_AUTH_HEADER_VALUE="$AUTH_VALUE"
+                  export ZAP_AUTH_HEADER_SITE
+                  ZAP_AUTH_HEADER_SITE=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.urlsplit(sys.argv[1]).hostname or "")' "$ZAP_TARGET")
+                  echo "ZAP and Nuclei send $ZAP_AUTH_HEADER to $ZAP_AUTH_HEADER_SITE."
+                else
+                  echo "::warning::zap_auth_command printed nothing — ZAP scans as an anonymous visitor."
+                fi
+              fi
+
               # baseline = passive (spider + look at the responses). full = active: ZAP
-              # sends the payloads itself, finds far more and takes far longer.
-              case "$ZAP_MODE" in
-                full) ZAP_SCRIPT=zap-full-scan.py ;;
-                *)    ZAP_SCRIPT=zap-baseline.py ;;
-              esac
+              # sends the payloads itself, finds far more and takes far longer. With an API
+              # definition, the API scan replaces the spider; -S keeps it passive.
+              ZAP_SPEC=""
+              if [ -n "$ZAP_API_DEFINITION" ]; then
+                ZAP_SCRIPT=zap-api-scan.py
+                case "$ZAP_API_DEFINITION" in
+                  http://*|https://*) ZAP_ARGS=(-t "$ZAP_API_DEFINITION") ;;
+                  *)
+                    if [ ! -f "$ZAP_API_DEFINITION" ]; then
+                      echo "::error::zap_api_definition: $ZAP_API_DEFINITION is not a file of the repository."
+                      exit 1
+                    fi
+                    # The scan reads a file from /zap/wrk, which is copied in (see below).
+                    ZAP_SPEC=$(basename "$ZAP_API_DEFINITION")
+                    ZAP_ARGS=(-t "$ZAP_SPEC") ;;
+                esac
+                ZAP_ARGS+=(-f openapi -O "$ZAP_TARGET")
+                [ "$ZAP_MODE" = "full" ] || ZAP_ARGS+=(-S)
+              else
+                case "$ZAP_MODE" in
+                  full) ZAP_SCRIPT=zap-full-scan.py ;;
+                  *)    ZAP_SCRIPT=zap-baseline.py ;;
+                esac
+                ZAP_ARGS=(-t "$ZAP_TARGET")
+              fi
               # ZAP stays a container — it is a large Java application with no usable
               # standalone binary — but its report is fetched with `docker cp` instead of a
               # bind mount. `docker cp` goes through the API, so it does not care whose
@@ -2336,13 +2798,35 @@ jobs:
               # chmod 777 workaround for ZAP running as uid 1000 against a workspace owned
               # by another uid.
               #
+              # /zap/wrk has to exist all the same: the image does not create it, and with a
+              # report option (-J) and no /zap/wrk the scripts print "the directory
+              # '/zap/wrk' is not mounted" and exit 3 before scanning anything. Until October
+              # 2026 this step ran exactly that way: every DAST run ended in "ZAP wrote no
+              # report", reproduced with zaproxy 2.17.0. An empty directory, writable by
+              # uid 1000, is now copied in as /zap/wrk before ZAP starts, with the API
+              # definition when there is one.
+              #
               # --network host: ZAP runs in a container, the application runs on the runner.
               # -I: warnings do not make ZAP exit non-zero, the gate lives in TDxGuard.
+              # -e NAME passes the variable from this environment, its value never on a
+              # command line; an unset one is not passed at all.
+              ZAP_WRK="$RUNNER_TEMP/zap-wrk"
+              rm -rf "$ZAP_WRK" && mkdir -p "$ZAP_WRK" && chmod 777 "$ZAP_WRK"
+              if [ -n "$ZAP_SPEC" ]; then
+                cp "$ZAP_API_DEFINITION" "$ZAP_WRK/$ZAP_SPEC"
+                chmod 644 "$ZAP_WRK/$ZAP_SPEC"
+              fi
               docker rm -f tdxguard-zap >/dev/null 2>&1 || true
-              docker run --name tdxguard-zap --network host \
-                ghcr.io/zaproxy/zaproxy:2.17.0 \
-                "$ZAP_SCRIPT" -t "$ZAP_TARGET" -J zap.json -I \
-                || echo "::warning::ZAP exited with an error."
+              if docker create --name tdxguard-zap --network host \
+                   -e ZAP_AUTH_HEADER -e ZAP_AUTH_HEADER_VALUE -e ZAP_AUTH_HEADER_SITE \
+                   ghcr.io/zaproxy/zaproxy:2.17.0 \
+                   "$ZAP_SCRIPT" "${ZAP_ARGS[@]}" -J zap.json -I >/dev/null \
+                 && docker cp "$ZAP_WRK/." tdxguard-zap:/zap/wrk; then
+                docker start -a tdxguard-zap \
+                  || echo "::warning::ZAP exited with an error."
+              else
+                echo "::warning::ZAP could not be started."
+              fi
               docker cp tdxguard-zap:/zap/wrk/zap.json zap.json \
                 || echo "::warning::ZAP wrote no report."
               docker rm -f tdxguard-zap >/dev/null 2>&1 || true
@@ -2375,8 +2859,13 @@ jobs:
                   "$NBASE/nuclei_${NUCLEI_VERSION}_checksums.txt"
                 (cd "$RUNNER_TEMP" && grep " $NZIP$" nuclei-checksums.txt | sha256sum -c -)
                 unzip -oq "$RUNNER_TEMP/$NZIP" nuclei -d "$RUNNER_TEMP"
+                NUCLEI_AUTH=()
+                if [ -n "$AUTH_VALUE" ]; then
+                  NUCLEI_AUTH=(-H "$ZAP_AUTH_HEADER: $AUTH_VALUE")
+                fi
                 "$RUNNER_TEMP/nuclei" \
                   -target "$ZAP_TARGET" -severity low,medium,high,critical \
+                  ${NUCLEI_AUTH[@]+"${NUCLEI_AUTH[@]}"} \
                   -sarif-export nuclei.sarif -no-interactsh -silent \
                   || echo "::warning::Nuclei exited with an error."
                 if [ -f nuclei.sarif ]; then
