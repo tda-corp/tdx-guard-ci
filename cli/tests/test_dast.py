@@ -49,9 +49,10 @@ class FakeDocker:
         self.calls.append(list(args))
         self.envs.append(kwargs.get("env"))
         stdout, code = "", 0
-        if args[0] == "sh":
+        if args[0] in ("sh", "cmd"):  # the auth command: sh -c, or cmd /c on Windows
             stdout = self.auth_output
-        elif args[:2] == ["docker", "cp"] and ":" in args[2] and not args[2].startswith("/"):
+        # Out of a container (its name first); a local path may hold a colon too (C:\\...).
+        elif args[:2] == ["docker", "cp"] and args[2].startswith("tdxguard-"):
             source, destination = args[2], args[3]
             if "zap" in source and "zap" not in self.fail:
                 Path(destination).write_text(json.dumps(ZAP_DOCUMENT))
@@ -83,9 +84,9 @@ class DastTestCase(unittest.TestCase):
 
 class TestTargets(unittest.TestCase):
     def test_a_local_target_through_host_docker_internal_outside_linux(self):
-        self.assertEqual("http://host.docker.internal:28080/api", dast.container_url("http://localhost:28080/api"))
+        self.assertEqual("http://host.docker.internal:28080/api", dast.container_url("http://localhost:28080/api", "darwin"))
         self.assertEqual("http://host.docker.internal/", dast.container_url("http://127.0.0.1/", "win32"))
-        self.assertEqual(["--add-host", "host.docker.internal:host-gateway"], dast.network_args("http://localhost"))
+        self.assertEqual(["--add-host", "host.docker.internal:host-gateway"], dast.network_args("http://localhost", "darwin"))
 
     def test_a_local_target_through_the_host_network_on_linux(self):
         self.assertEqual("http://localhost:8000", dast.container_url("http://localhost:8000", "linux"))
