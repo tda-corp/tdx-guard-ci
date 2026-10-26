@@ -500,8 +500,9 @@ rules' install records that language list: when an upgrade changes it (0.1.3 add
 Kotlin, Scala, Ruby, C# and C), the 1 MB rules archive is downloaded and extracted again. Every download is checked against a sha256 pinned in the
 package (`tdxguard/engine/tools.py`, the same table the scanner image is built from) before
 anything is unpacked, and moved into place only when complete. On Linux, Opengrep's musl
-build is used on Alpine and its glibc (manylinux) build elsewhere. zizmor has no musl build:
-on Alpine the scan runs without it and says so in its warnings. Trivy's database is shared
+build is used on Alpine and its glibc (manylinux) build elsewhere. zizmor on Linux is the
+static musl build from its PyPI wheel, which runs on any Linux (its linux-gnu release needs glibc
+2.34). Trivy's database is shared
 with the docker engine in `~/.cache/tdxguard/scanner`.
 
 | Command | |
