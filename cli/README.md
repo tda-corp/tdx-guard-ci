@@ -331,6 +331,61 @@ import the components too; a `--branch` outside `local/` always gets them.
 | `--json` | print a JSON document on stdout; messages go to stderr |
 | `-v` | stream the output of `docker build` and of the scanners |
 
+### DAST: ZAP and Nuclei against the running application
+
+The other scanners read the repository; DAST needs the application running. Start it the way
+you develop with it (`docker compose up`, `php artisan serve`, `npm run dev`), then point the
+scan at it:
+
+```
+tdxguard scan --dast http://localhost:8000
+tdxguard scan --dast http://localhost:8000 --dast-api docs/openapi.yaml \
+  --dast-auth-command './scripts/zap-token.sh' --nuclei
+```
+
+or set it once in `.tdxguard.yml`:
+
+```yaml
+dast:
+  target: http://localhost:8000      # required
+  api: docs/openapi.yaml             # an OpenAPI definition, URL or file: ZAP's API scan
+  auth_command: ./scripts/zap-token.sh   # prints the value of the sign-in header
+  auth_header: Authorization         # default
+  mode: baseline                     # full: active attacks, local targets only
+  nuclei: true                       # known CVEs, exposed panels and default credentials
+  allow_full_on_remote: false        # full against another host: only a test environment you own
+```
+
+The flags override the file. It runs the same scans as the CI template, with the same images
+(`ghcr.io/zaproxy/zaproxy:2.17.0`, `projectdiscovery/nuclei:v3.11.1`), so it needs Docker;
+without Docker the scan says so and goes on with the other scanners (`--skip dast` skips it).
+
+- **What ZAP runs.** Without `api`, its baseline scan (passive: a spider, and checks of the
+  responses: security headers, cookies, error disclosure, version leaks) or with `mode: full` its
+  full scan (active: it sends the attack payloads). With `api`, its API scan, which requests
+  every operation of the definition: an API behind a single-page app has no links for a spider to
+  follow, so without it ZAP finds next to nothing there. Passive (`-S`) unless the mode is full.
+- **Signed in.** `auth_command` runs in the repository root once, before ZAP starts; the last
+  line it prints is the header value, for example `Bearer <token>` of a test user, obtained from
+  the running application through its own login API. ZAP adds the header to every request to the
+  target's host and to no other. The value reaches ZAP through the environment (`docker create -e
+  ZAP_AUTH_HEADER_VALUE`), never on a command line; Nuclei only takes it as an argument (`-H`). A
+  command that fails or prints nothing stops the DAST step, rather than scanning signed out
+  without saying so. Use a test account: in full mode ZAP changes and deletes whatever that
+  account may.
+- **localhost.** ZAP runs in a container and the application on this machine. On Linux the
+  container uses the host network; on macOS and Windows a `localhost` target becomes
+  `host.docker.internal`, Docker Desktop's name for the machine. The application must listen on
+  an address the container reaches: `0.0.0.0`, or a port Docker publishes.
+- **Full mode** refuses a target that is not this machine unless `allow_full_on_remote: true`:
+  it is an attack, and pointed at production it changes production data.
+- **Reports.** `zap.json` (parser ZAP) and `nuclei.sarif` (parser SARIF) join the others, with the
+  target as the endpoint. ZAP's High alerts count as high in the local gate. Nuclei writes no file
+  when nothing matched; the scan then reports 0 instead of an error.
+
+IAST (Aikido Zen) is not part of `tdxguard scan`: it needs Zen embedded in the application. CI's
+runtime job runs it (`app_start_command` in the template).
+
 ### Exit codes
 
 | Code | Meaning |

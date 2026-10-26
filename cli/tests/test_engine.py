@@ -507,7 +507,7 @@ class TestContainerArguments(unittest.TestCase):
         self.assertEqual(0, code)
         self.assertEqual(
             f"tdxguard-scanner v1.2.3\nbetterleaks {tools.BETTERLEAKS_VERSION}\nopengrep {tools.OPENGREP_VERSION} "
-            f"(rules {tools.OPENGREP_RULES_SHA})\ntrivy {tools.TRIVY_VERSION}\n",
+            f"(rules {tools.OPENGREP_RULES_SHA})\ntrivy {tools.TRIVY_VERSION}\nzizmor {tools.ZIZMOR_VERSION}\n",
             out,
         )
         self.assertEqual(2, self.run_main(["frobnicate"])[0])

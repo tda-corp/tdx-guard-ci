@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
+from tdxguard.dast import NUCLEI_REPORT, ZAP_REPORT, zap_counts
 from tdxguard.engine.scan import is_firebase_client_key
 
 SUMMARY_FILE = "summary.json"
@@ -37,6 +38,7 @@ class Upload:
     path: Path
     parser: str
     docker_image_name_tag: Optional[str] = None
+    endpoint_url: Optional[str] = None
 
     def fields(self, product: str, branch: str, licenses: bool = True) -> Dict[str, str]:
         """
@@ -47,12 +49,14 @@ class Upload:
         fields = {"product_name": product, "branch_name": branch, "parser_name": self.parser}
         if self.docker_image_name_tag:
             fields["docker_image_name_tag"] = self.docker_image_name_tag
+        if self.endpoint_url:
+            fields["endpoint_url"] = self.endpoint_url
         if self.parser == "CycloneDX" and not licenses:
             fields["suppress_licenses"] = "true"
         return fields
 
 
-def upload_plan(out: Path, image_refs: Mapping[str, str]) -> List[Upload]:
+def upload_plan(out: Path, image_refs: Mapping[str, str], dast_target: Optional[str] = None) -> List[Upload]:
     """
     Which report goes up with which parser, in the CI template's order. `image_refs` maps
     an image slug to the locally built reference, which becomes docker_image_name_tag.
@@ -84,10 +88,24 @@ def upload_plan(out: Path, image_refs: Mapping[str, str]) -> List[Upload]:
     for path in sorted(out.iterdir()) if out.is_dir() else []:
         if MOBSF_REPORT.match(path.name):
             plan.append(Upload(path, "MobSF"))
+    # DAST against the running application, with the target as the endpoint, as in CI.
+    if (out / ZAP_REPORT).is_file():
+        plan.append(Upload(out / ZAP_REPORT, "ZAP", endpoint_url=dast_target))
+    if (out / NUCLEI_REPORT).is_file():
+        plan.append(Upload(out / NUCLEI_REPORT, "SARIF", endpoint_url=dast_target))
     return plan
 
 
-FIXED_REPORTS = ("betterleaks.json", "opengrep.sarif", "trivy.sarif", "sbom.cdx.json", "zizmor.sarif", SUMMARY_FILE)
+FIXED_REPORTS = (
+    "betterleaks.json",
+    "opengrep.sarif",
+    "trivy.sarif",
+    "sbom.cdx.json",
+    "zizmor.sarif",
+    ZAP_REPORT,
+    NUCLEI_REPORT,
+    SUMMARY_FILE,
+)
 
 
 def report_files(out: Path) -> List[Path]:
@@ -219,6 +237,9 @@ def count(out: Path, ignore_unfixed: bool = False) -> Counts:
             findings = load_json(path)
             severe = [f for f in findings if not is_firebase_client_key(f)] if isinstance(findings, list) else []
             counts.add(path.name, 0, len(severe))
+        elif path.name == ZAP_REPORT:
+            # ZAP has no critical; its High alerts (riskcode 3) count as high, as in the templates.
+            counts.add(path.name, 0, zap_counts(load_json(path))[1])
     return counts
 
 

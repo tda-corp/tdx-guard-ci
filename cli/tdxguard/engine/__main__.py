@@ -72,6 +72,7 @@ def print_version(version: str) -> None:
     print(f"betterleaks {tools.BETTERLEAKS_VERSION}")
     print(f"opengrep {tools.OPENGREP_VERSION} (rules {tools.OPENGREP_RULES_SHA})")
     print(f"trivy {tools.TRIVY_VERSION}")
+    print(f"zizmor {tools.ZIZMOR_VERSION}")
 
 
 def parse(argv: Sequence[str]) -> Tuple[Dict[str, object], bool]:
