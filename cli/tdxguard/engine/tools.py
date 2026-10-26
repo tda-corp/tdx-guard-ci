@@ -93,6 +93,7 @@ class Asset:
     name: str  # the file name in the release
     sha256: str
     member: str = ""  # the binary inside the archive; empty: the asset is the binary
+    url: str = ""  # where it is, when the tool's url pattern does not fit (a PyPI file)
 
 
 @dataclass(frozen=True)
@@ -130,7 +131,7 @@ class Tool:
             return False
 
     def download_url(self, asset: Asset) -> str:
-        return self.url.format(version=self.version, asset=asset.name)
+        return asset.url or self.url.format(version=self.version, asset=asset.name)
 
     def executable_name(self, platform: str) -> str:
         return self.binary + (".exe" if platform.startswith("windows") else "")
@@ -218,25 +219,31 @@ TOOLS: Dict[str, Tool] = {
                                     "7b4762a5a5326cb4b83dfd2bb5d9aaf15a1ed867c75cad7dd8b38840a28e7be6", "trivy.exe"),
         },
     ),
-    # zizmor audits GitHub Actions workflows. It publishes no checksum file: sha256 from the
-    # asset digests of `gh api repos/zizmorcore/zizmor/releases/tags/v1.31.1`. Its Linux
-    # builds link glibc, and there is no musl build: on Alpine the scan runs without it.
+    # zizmor audits GitHub Actions workflows. It publishes no checksum file: sha256 from the asset
+    # digests of `gh api repos/zizmorcore/zizmor/releases/tags/v1.31.1`, and for Linux from PyPI.
+    #
+    # Linux takes the musllinux wheel from PyPI, not the release's linux-gnu build: that one needs
+    # glibc 2.34 and failed on the self-hosted runners ("GLIBC_2.34 not found"), while the musl
+    # build is static-pie and runs on any Linux, glibc 2.28 and Alpine checked. A wheel is a zip;
+    # the binary is zizmor-<version>.data/scripts/zizmor.
     "zizmor": Tool(
         name="zizmor",
         version=ZIZMOR_VERSION,
         url="https://github.com/zizmorcore/zizmor/releases/download/v{version}/{asset}",
         binary="zizmor",
-        static_linux=False,
-        required=False,
         assets={
             "darwin-arm64": Asset("zizmor-aarch64-apple-darwin.tar.gz",
                                   "ad5aa633cd56215b11e6c51d51f90c7e6b22904a75047d1215abbd422f61d698", "zizmor"),
             "darwin-x86_64": Asset("zizmor-x86_64-apple-darwin.tar.gz",
                                    "72ae63bb85b67229c06242f04195cb43927e9fab5f43803c6434dc701a517d61", "zizmor"),
-            "linux-x86_64": Asset("zizmor-x86_64-unknown-linux-gnu.tar.gz",
-                                  "d185f726bdaf92df78273217dfdd24ebcd6b0ef48cf3ce776ff5762b6e138c99", "zizmor"),
-            "linux-aarch64": Asset("zizmor-aarch64-unknown-linux-gnu.tar.gz",
-                                   "37eebbd5762a44f262d94875431b14a6d2402991e90a685113ea97b8b41be833", "zizmor"),
+            "linux-x86_64": Asset("zizmor-1.31.1-py3-none-musllinux_1_2_x86_64.whl",
+                                  "e7fdf82d31cc67eb1d5030bf2372b25ee2a1c3ad05017e18da70ed138c4accd6", "zizmor",
+                                  "https://files.pythonhosted.org/packages/ba/48/a9b5bf90d2ac6db62c133e5e7a06b120dc2bf1f"
+                                  "55addc88e363d9342c9fb/zizmor-1.31.1-py3-none-musllinux_1_2_x86_64.whl"),
+            "linux-aarch64": Asset("zizmor-1.31.1-py3-none-musllinux_1_2_aarch64.whl",
+                                   "c5ccb17fd820bb1ddc63cc9a715e97c063025487e585f640389a86d9dfc97cda", "zizmor",
+                                   "https://files.pythonhosted.org/packages/2c/53/0841490dde334d8ecf590c008922d942da8bb"
+                                   "b51a053ad61fd596591465f/zizmor-1.31.1-py3-none-musllinux_1_2_aarch64.whl"),
             "windows-x86_64": Asset("zizmor-x86_64-pc-windows-msvc.zip",
                                     "4de30371c8a3b483aecbcf0dec1fd6a2b6aae65051ca226b4f6527baac6a8c7a", "zizmor.exe"),
         },
@@ -546,7 +553,7 @@ def _extract_binary(archive: Path, asset: Asset, dest: Path) -> None:
     if not asset.member:
         os.replace(str(archive), str(dest))
         return
-    if asset.name.endswith(".zip"):
+    if asset.name.endswith((".zip", ".whl")):
         with zipfile.ZipFile(archive) as zf:
             for info in zf.infolist():
                 if not info.is_dir() and PurePosixPath(info.filename).name == asset.member:

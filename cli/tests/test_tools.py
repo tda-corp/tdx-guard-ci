@@ -173,15 +173,22 @@ class TestPinnedTable(unittest.TestCase):
             "ZIZMOR_VERSION": tools.ZIZMOR_VERSION,
             "ZIZMOR_SHA256_X86_64": zizmor.assets["linux-x86_64"].sha256,
             "ZIZMOR_SHA256_AARCH64": zizmor.assets["linux-aarch64"].sha256,
+            "ZIZMOR_URL_X86_64": zizmor.assets["linux-x86_64"].url,
+            "ZIZMOR_URL_AARCH64": zizmor.assets["linux-aarch64"].url,
         }
         for variable, pinned in pins.items():
             with self.subTest(variable=variable):
                 self.assertEqual([pinned], re.findall(rf'^\s*{variable}:\s*"([^"]+)"', text, re.MULTILINE))
 
-    def test_a_musl_system_scans_without_zizmor(self):
-        self.assertFalse(tools.TOOLS["zizmor"].available_for("linux-x86_64-musl"))
-        self.assertTrue(tools.TOOLS["trivy"].available_for("linux-x86_64-musl"))
-        self.assertTrue(tools.TOOLS["zizmor"].available_for("linux-x86_64"))
+    def test_zizmor_on_linux_is_the_static_musl_build(self):
+        """The linux-gnu build needs glibc 2.34; the musllinux wheel runs on any Linux, Alpine included."""
+        zizmor = tools.TOOLS["zizmor"]
+        for platform in ("linux-x86_64", "linux-aarch64", "linux-x86_64-musl", "linux-aarch64-musl"):
+            with self.subTest(platform=platform):
+                asset = zizmor.asset_for(platform)
+                self.assertIn("musllinux", asset.name)
+                self.assertTrue(zizmor.download_url(asset).startswith("https://files.pythonhosted.org/packages/"))
+                self.assertTrue(zizmor.download_url(asset).endswith("/" + asset.name))
 
     @unittest.skipUnless((REPOSITORY / "ci-templates").is_dir(), "ci-templates/ is not next to the package")
     def test_the_image_takes_its_tools_from_this_table(self):
