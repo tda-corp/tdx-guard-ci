@@ -63,7 +63,12 @@ def upload_plan(out: Path, image_refs: Mapping[str, str]) -> List[Upload]:
     # records that the secrets scan ran, and leaves the open secrets alone.
     if betterleaks.is_file() and _betterleaks_report(betterleaks):
         plan.append(Upload(betterleaks, "Betterleaks"))
-    for name, parser in (("opengrep.sarif", "SARIF"), ("trivy.sarif", "SARIF"), ("sbom.cdx.json", "CycloneDX")):
+    for name, parser in (
+        ("opengrep.sarif", "SARIF"),
+        ("trivy.sarif", "SARIF"),
+        ("sbom.cdx.json", "CycloneDX"),
+        ("zizmor.sarif", "SARIF"),
+    ):
         if (out / name).is_file():
             plan.append(Upload(out / name, parser))
     for path in sorted(out.iterdir()) if out.is_dir() else []:
@@ -82,7 +87,7 @@ def upload_plan(out: Path, image_refs: Mapping[str, str]) -> List[Upload]:
     return plan
 
 
-FIXED_REPORTS = ("betterleaks.json", "opengrep.sarif", "trivy.sarif", "sbom.cdx.json", SUMMARY_FILE)
+FIXED_REPORTS = ("betterleaks.json", "opengrep.sarif", "trivy.sarif", "sbom.cdx.json", "zizmor.sarif", SUMMARY_FILE)
 
 
 def report_files(out: Path) -> List[Path]:

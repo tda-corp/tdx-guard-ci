@@ -1,0 +1,239 @@
+# TDxGuard's own Opengrep rules, loaded next to the security rules of opengrep-rules.
+#
+# Each rule comes from a finding that a manual assessment of a product made and the community
+# rules missed (October 2026, a Laravel + Next.js product): what the assessment found by
+# reading the code, written down so that every scan finds it from now on. A rule belongs here
+# only when it is a security problem on its own, not a style preference, and when its test
+# cases in cli/tests/fixtures/tdxguard_rules/ hold.
+#
+# This file is the one source. Both CI templates embed a byte-identical copy as
+# `tdxguard-rules.yaml` (tests/test_helpers_in_sync.py fails when one drifts); the scan puts
+# it into ogrules-security/tdxguard-rules/, so the rule ids read "tdxguard-rules.<id>" once
+# sarif-enrich.py has trimmed them.
+
+rules:
+  - id: php.laravel-artisan-command-over-http
+    languages: [php]
+    severity: ERROR
+    message: >-
+      An HTTP endpoint runs the Artisan command $CMD. Whoever reaches the URL runs it,
+      and so do crawlers and chat clients unfurling a pasted link: a GET route is fetched
+      by every link preview. A migration started this way can run halfway through a deploy,
+      and the response names the migrations. Run migrations and maintenance commands from the
+      deployment (a Cloud Run job, a CI step, a release phase), and remove the route.
+    metadata:
+      category: security
+      cwe: ["CWE-306: Missing Authentication for Critical Function"]
+      owasp: ["A01:2021 - Broken Access Control"]
+      confidence: HIGH
+      references:
+        - https://laravel.com/docs/migrations#running-migrations
+    paths:
+      include:
+        - "**/routes/**"
+        - "**/app/Http/**"
+    patterns:
+      - pattern-either:
+          - pattern: Artisan::call($CMD, ...)
+          - pattern: Artisan::queue($CMD, ...)
+          - pattern: \Illuminate\Support\Facades\Artisan::call($CMD, ...)
+          - pattern: \Artisan::call($CMD, ...)
+      - metavariable-regex:
+          metavariable: $CMD
+          regex: ^['"](migrate|db:|schema:|key:generate|down\b|up\b|optimize|config:|cache:|route:|queue:|storage:|tinker)
+
+  - id: php.laravel-request-body-logged
+    languages: [php]
+    severity: WARNING
+    message: >-
+      The whole request body reaches a log. Every field the client sends lands in the logs
+      as it is, nested ones included: names, dates of birth, passwords, tokens. Log the
+      fields you need by name ($request->only([...])), or mask the body recursively first.
+    metadata:
+      category: security
+      cwe: ["CWE-532: Insertion of Sensitive Information into Log File"]
+      owasp: ["A09:2021 - Security Logging and Monitoring Failures"]
+      confidence: MEDIUM
+    mode: taint
+    pattern-sources:
+      - pattern: $REQ->all()
+      - pattern: $REQ->input()
+      - pattern: $REQ->json()->all()
+      - pattern: request()->all()
+      - pattern: $REQ->getContent()
+    pattern-sanitizers:
+      - pattern: $REQ->only(...)
+    pattern-sinks:
+      - pattern: Log::$LEVEL(...)
+      - pattern: \Log::$LEVEL(...)
+      - pattern: Log::channel(...)->$LEVEL(...)
+      - pattern: logger(...)
+      - pattern: info(...)
+      - pattern: $LOGGER->log(...)
+
+  - id: php.exception-details-in-response
+    languages: [php]
+    severity: WARNING
+    message: >-
+      The file, line or stack trace of an exception goes into an HTTP response. It shows the
+      server's directory layout and code to anyone who can trigger an error, and an SQL error
+      message hands out the query. Return a generic message and an error id, log the
+      details, and show them only when config('app.debug') is on.
+    metadata:
+      category: security
+      cwe: ["CWE-209: Generation of Error Message Containing Sensitive Information"]
+      owasp: ["A05:2021 - Security Misconfiguration"]
+      confidence: MEDIUM
+    mode: taint
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern: $E->getFile()
+              - pattern: $E->getLine()
+              - pattern: $E->getTrace()
+              - pattern: $E->getTraceAsString()
+          # Shown only in debug mode or outside production: config('app.debug'),
+          # config('const.app_env'), env('APP_ENV'), app()->environment('local'), ...
+          - pattern-not-inside: |
+              if (<... config("=~/(?i)(debug|env)/") ...>) { ... }
+          - pattern-not-inside: |
+              if (<... env("=~/(?i)(debug|env)/") ...>) { ... }
+          - pattern-not-inside: |
+              if (<... $APP->environment(...) ...>) { ... }
+          - pattern-not-inside: |
+              if (<... App::environment(...) ...>) { ... }
+          - pattern-not-inside: |
+              if (<... app()->hasDebugModeEnabled() ...>) { ... }
+          - pattern-not-inside: |
+              <... config("=~/(?i)(debug|env)/") ...> ? $A : $B
+    pattern-sinks:
+      - pattern: response()->json(...)
+      - pattern: response(...)
+      - pattern: Response::json(...)
+      - pattern: new JsonResponse(...)
+      - pattern: new \Illuminate\Http\JsonResponse(...)
+
+  - id: javascript.sentry-send-default-pii
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      Sentry is told to send personal data: with sendDefaultPii the events carry the user's
+      IP address, cookies, request headers and the logged-in user. That data then lives at
+      Sentry, outside the product's own data protection. Leave sendDefaultPii off and attach
+      only a pseudonymous user id.
+    metadata:
+      category: security
+      cwe: ["CWE-359: Exposure of Private Personal Information to an Unauthorized Actor"]
+      confidence: HIGH
+      references:
+        - https://docs.sentry.io/platforms/javascript/configuration/options/#sendDefaultPii
+    pattern-either:
+      - pattern: |
+          $SENTRY.init({..., sendDefaultPii: true, ...})
+      - pattern: |
+          init({..., sendDefaultPii: true, ...})
+
+  - id: javascript.sentry-replay-unmasked
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      Sentry's session replay records the page with its text or media unmasked: every name,
+      address and medical detail on screen ends up in the recording. Keep maskAllText and
+      blockAllMedia at their default (true) and unmask single elements where needed.
+    metadata:
+      category: security
+      cwe: ["CWE-359: Exposure of Private Personal Information to an Unauthorized Actor"]
+      confidence: HIGH
+      references:
+        - https://docs.sentry.io/platforms/javascript/session-replay/privacy/
+    pattern-either:
+      - pattern: |
+          $SENTRY.replayIntegration({..., maskAllText: false, ...})
+      - pattern: |
+          replayIntegration({..., maskAllText: false, ...})
+      - pattern: |
+          $SENTRY.replayIntegration({..., blockAllMedia: false, ...})
+      - pattern: |
+          replayIntegration({..., blockAllMedia: false, ...})
+
+  - id: python.sentry-send-default-pii
+    languages: [python]
+    severity: WARNING
+    message: >-
+      Sentry is told to send personal data: with send_default_pii the events carry the
+      user's IP address, cookies, request headers and the logged-in user. That data then
+      lives at Sentry, outside the product's own data protection. Leave it off.
+    metadata:
+      category: security
+      cwe: ["CWE-359: Exposure of Private Personal Information to an Unauthorized Actor"]
+      confidence: HIGH
+    pattern: sentry_sdk.init(..., send_default_pii=True, ...)
+
+  - id: php.sentry-send-default-pii
+    languages: [php]
+    severity: WARNING
+    message: >-
+      Sentry is told to send personal data: with send_default_pii the events carry the
+      user's IP address, cookies, request headers and the logged-in user. That data then
+      lives at Sentry, outside the product's own data protection. Leave it off.
+    metadata:
+      category: security
+      cwe: ["CWE-359: Exposure of Private Personal Information to an Unauthorized Actor"]
+      confidence: HIGH
+    pattern: |
+      [..., 'send_default_pii' => true, ...]
+
+  - id: javascript.nextjs-image-any-remote-host
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      next/image may fetch images from any host: hostname "$HOST" in images.remotePatterns
+      turns /_next/image into an open proxy. Anyone can have the server fetch any URL
+      (server-side request forgery against internal addresses, bandwidth on your bill).
+      Name the hosts the images really come from.
+    metadata:
+      category: security
+      cwe: ["CWE-918: Server-Side Request Forgery (SSRF)"]
+      owasp: ["A10:2021 - Server-Side Request Forgery (SSRF)"]
+      confidence: HIGH
+      references:
+        - https://nextjs.org/docs/app/api-reference/components/image#remotepatterns
+    paths:
+      include:
+        - "**/next.config.*"
+    patterns:
+      - pattern-inside: |
+          {..., remotePatterns: [...], ...}
+      - pattern: |
+          {..., hostname: "$HOST", ...}
+      - metavariable-regex:
+          metavariable: $HOST
+          regex: ^\*{1,2}$
+
+  - id: yaml.github-actions-gcp-service-account-key
+    languages: [yaml]
+    severity: WARNING
+    message: >-
+      The workflow signs in to Google Cloud with a service account key (credentials_json).
+      The key is valid until someone deletes it, and whoever reads it, from a log, an
+      artifact or a compromised action, can use it from anywhere. Use Workload Identity
+      Federation (workload_identity_provider + service_account): the job gets a token that
+      expires within the hour and only this repository can obtain.
+    metadata:
+      category: security
+      cwe: ["CWE-798: Use of Hard-coded Credentials"]
+      confidence: HIGH
+      references:
+        - https://github.com/google-github-actions/auth#preferred-direct-workload-identity-federation
+    paths:
+      include:
+        - "**/.github/workflows/*"
+    patterns:
+      - pattern-inside: |
+          uses: $ACTION
+          ...
+      - pattern: |
+          credentials_json: $KEY
+      - metavariable-regex:
+          metavariable: $ACTION
+          regex: ^google-github-actions/auth@

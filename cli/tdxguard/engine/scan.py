@@ -1,6 +1,6 @@
 """
-The scans of ci-templates/github/tdxguard.yml (jobs betterleaks, opengrep, trivy,
-image_scan): the same versions, flags, exclusions and helper scripts, the same report
+The scans of ci-templates/github/tdxguard.yml (jobs betterleaks, opengrep, trivy with
+zizmor, image_scan): the same versions, flags, exclusions and helper scripts, the same report
 files, and summary.json. Pushing to TDxGuard and gating are the caller's job.
 
 This used to be the bash entrypoint of the scanner image; the image now runs this module
@@ -30,10 +30,10 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Set
 
 from tdxguard import frozen
 from tdxguard.engine import counts
-from tdxguard.engine.helpers import OPENGREP_PRUNE_RULES, SARIF_ENRICH
+from tdxguard.engine.helpers import OPENGREP_PRUNE_RULES, SARIF_ENRICH, TDXGUARD_RULES, TDXGUARD_RULES_ROOT
 from tdxguard.engine.tools import MARKER, RULE_LANGUAGES, Toolset
 
-SCANNERS = ("betterleaks", "opengrep", "trivy", "image")
+SCANNERS = ("betterleaks", "opengrep", "trivy", "zizmor", "image")
 SECRETS_MODES = ("dir", "git")
 
 # Third-party code a dependency manager checked out into the repository: npm, Bower,
@@ -44,7 +44,7 @@ SECRETS_MODES = ("dir", "git")
 # by the lockfiles at its root (Podfile.lock, package-lock.json, composer.lock), which Trivy
 # still reads.
 VENDORED_DIRS = ("node_modules", "bower_components", "vendor", "Pods", "Carthage")
-# Betterleaks 1.8.1 has no path exclusion flag. A repository without a config of its own gets
+# Betterleaks 1.9.0 has no path exclusion flag. A repository without a config of its own gets
 # the default rules plus this allowlist; one with a .gitleaks.toml or .betterleaks.toml
 # decides for itself. Both CI templates carry the same text (a test fails when they differ).
 #
@@ -54,6 +54,15 @@ VENDORED_DIRS = ("node_modules", "bower_components", "vendor", "Pods", "Carthage
 LOCKFILES_PATTERN = (
     r"(?:^|/)(?:Podfile\.lock|pubspec\.lock|Package\.resolved|Cargo\.lock|go\.sum|composer\.lock|Gemfile\.lock"
     r"|gradle\.lockfile|package-lock\.json|yarn\.lock|pnpm-lock\.yaml|poetry\.lock|Pipfile\.lock|packages\.lock\.json)$"
+)
+# Translation files carry the word "password" as a key with its translation as the value
+# ("password": "Mật khẩu"), which generic-password takes for a credential: 1,310 of the 1,839
+# findings in tda-plane's history were its locale files (JSON, later TypeScript modules). Only that
+# rule is muted there; the rules for a specific kind of secret (cloud keys, private keys, tokens)
+# still read them.
+TRANSLATIONS_PATTERN = (
+    r"(?:^|/)(?:locales?|i18n|l10n|translations?|lang)/(?:.+/)?[^/]+\.(?:json|ya?ml|po|pot|arb|strings|xliff|xlf"
+    r"|properties|[cm]?[jt]s)$"
 )
 BETTERLEAKS_DEFAULT_CONFIG = f"""[extend]
 useDefault = true
@@ -66,6 +75,11 @@ paths = ['''(?:^|/)(?:{"|".join(VENDORED_DIRS)})/''']
 description = "Lockfiles: checksums, not keys"
 targetRules = ["generic-api-key"]
 paths = ['''{LOCKFILES_PATTERN}''']
+
+[[allowlists]]
+description = "Translation files: the word password, not a password"
+targetRules = ["generic-password"]
+paths = ['''{TRANSLATIONS_PATTERN}''']
 """
 
 # A Google API key in a Firebase app's config file is the app's client key: it ships inside
@@ -138,6 +152,23 @@ def outside_repository(src: Path) -> List[str]:
     return sorted(set(ignored + nested))
 
 
+# zizmor's settings for a repository without a zizmor.yml of its own. The same text as
+# ZIZMOR_DEFAULT_CONFIG in ci-templates/github/tdxguard.yml (a test fails when they differ).
+#
+# zizmor 1.31 asks for a commit SHA on every action, so actions/checkout@v7 alone would be a
+# High finding in every repository. TDA references actions by their version tag (the reusable
+# TDxGuard workflow itself through its moving tag v1, on purpose), so a tag is accepted for
+# every action. A repository that wants SHA pins says so in a zizmor.yml of its own, with
+# `"*": hash-pin`; the rest of zizmor's audits apply either way.
+ZIZMOR_DEFAULT_CONFIG = """rules:
+  unpinned-uses:
+    config:
+      policies:
+        "*": ref-pin
+"""
+# zizmor finds a config of these names by itself.
+ZIZMOR_OWN_CONFIGS = ("zizmor.yml", "zizmor.yaml", ".github/zizmor.yml", ".github/zizmor.yaml")
+
 # The CI template's exclusions.
 OPENGREP_EXCLUDES = (
     *VENDORED_DIRS,
@@ -152,7 +183,8 @@ OPENGREP_EXCLUDES = (
 # A plain name only matches at the repository root; **/ matches at any depth (ios/Pods in a
 # Flutter app).
 TRIVY_SKIP_DIRS = (*(f"**/{directory}" for directory in VENDORED_DIRS), ".venv")
-OPENGREP_RULE_ROOTS = ",".join(RULE_LANGUAGES)
+# The rule ids are trimmed to the community rules' language roots and to the root of our own rules.
+OPENGREP_RULE_ROOTS = ",".join((*RULE_LANGUAGES, TDXGUARD_RULES_ROOT))
 
 SUMMARY_FILE = "summary.json"
 EXIT_OK = 0
@@ -362,6 +394,9 @@ class Scan:
             return
         for skipped in OPENGREP_SKIPPED_RULES:
             shutil.rmtree(str(rules / skipped), ignore_errors=True)
+        # TDxGuard's own rules, next to the community ones, as the templates place them.
+        (rules / TDXGUARD_RULES_ROOT).mkdir()
+        shutil.copyfile(str(TDXGUARD_RULES), str(rules / TDXGUARD_RULES_ROOT / "tdxguard-rules.yaml"))
         # CI ignores its own rule trees (ogrules, ogrules-security) inside the checkout; the
         # same names are passed so a repository that happens to hold such a directory
         # behaves alike.
@@ -432,6 +467,51 @@ class Scan:
 
         self.row("trivy", "Trivy (IaC)", "trivy.sarif", counts.sarif_all, counts.sarif_error)
         self.row("trivy", "Trivy (dependencies)", "sbom.cdx.json", counts.cyclonedx_all, counts.cyclonedx_severe)
+
+    def zizmor(self) -> None:
+        """The template's zizmor step: an audit of the GitHub Actions workflows, where there are any."""
+        report = "zizmor.sarif"
+        self.remove(report)
+        if not (self.options.src / ".github" / "workflows").is_dir():
+            return
+        if self.tools.zizmor is None:
+            self.warning("zizmor has no build for this platform: the GitHub Actions workflows are not audited")
+            return
+        config: List[str] = []
+        if not any((self.options.src / name).is_file() for name in ZIZMOR_OWN_CONFIGS):
+            generated = self.work / "zizmor.yml"
+            generated.write_text(ZIZMOR_DEFAULT_CONFIG, encoding="utf-8")
+            config = ["--config", str(generated)]
+        self.log("==> zizmor (GitHub Actions)")
+        # Offline: no GitHub token is needed, and the online audits (known-vulnerable action
+        # versions, impostor commits) would make the result depend on the API's rate limit.
+        # It writes the SARIF to stdout, which run_command hands to the log, hence a file here.
+        try:
+            with open(self.report(report), "w", encoding="utf-8") as sarif:
+                code = subprocess.run(  # nosec B603
+                    [str(self.tools.zizmor), "--offline", "--no-progress", "--no-exit-codes", "--format", "sarif",
+                     *config, "."],
+                    cwd=str(self.options.src),
+                    env=self.environment,
+                    stdin=subprocess.DEVNULL,
+                    stdout=sarif,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    check=False,
+                )  # fmt: skip
+        except OSError as e:
+            self.error(f"zizmor: {e}")
+            self.remove(report)
+            return
+        for line in code.stderr.splitlines():
+            self.output(line)
+        if code.returncode != 0 or not _valid_json(self.report(report)):
+            self.error(f"zizmor failed (exit status {code.returncode})")
+            self.remove(report)
+            return
+        self.row("zizmor", "zizmor (GitHub Actions)", report, counts.sarif_all, counts.sarif_error)
 
     def images(self) -> None:
         """
@@ -506,6 +586,8 @@ class Scan:
                 self.opengrep()
             if not self.skipped("trivy"):
                 self.trivy()
+            if not self.skipped("zizmor"):
+                self.zizmor()
             if options.images and not self.skipped("image"):
                 self.images()
         finally:
@@ -552,12 +634,14 @@ def scanner_environment(base: Optional[Mapping[str, str]] = None, platform: str 
     """
     The scanners' environment. Log-only settings, which change nothing in the reports: no
     progress bars (they flood a log file) and no "a newer Trivy is available" check, a
-    network call the scan does not need. Both can be overridden from the environment.
+    network call the scan does not need. Plus Trivy's timeout, as in CI: its 5 minute default
+    is too short for a large image. All three can be overridden from the environment.
     Opengrep reads its rule files with the locale's codec, so the locale must be UTF-8.
     """
     environment = dict(os.environ if base is None else base)
     environment.setdefault("TRIVY_NO_PROGRESS", "true")
     environment.setdefault("TRIVY_SKIP_VERSION_CHECK", "true")
+    environment.setdefault("TRIVY_TIMEOUT", "30m")
     environment["PYTHONUTF8"] = "1"
     locale = environment.get("LC_ALL") or environment.get("LC_CTYPE") or environment.get("LANG") or ""
     if not platform.startswith("win") and "utf-8" not in locale.lower() and "utf8" not in locale.lower():
@@ -574,7 +658,7 @@ def make_work_dir(base: Optional[Path] = None) -> Path:
     The id joins the path with dots, so a directory named "c.smith" counts as "c" and "smith".
     """
     work = Path(tempfile.mkdtemp(prefix="tdxguard.", dir=str(base) if base else None)).resolve()
-    if not _id_segments(work) & set(RULE_LANGUAGES):
+    if not _id_segments(work) & set(OPENGREP_RULE_ROOTS.split(",")):
         return work
     shutil.rmtree(str(work), ignore_errors=True)
     fallback = Path.home() / ".cache" / "tdxguard" / "work"

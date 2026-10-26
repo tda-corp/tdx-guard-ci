@@ -109,7 +109,7 @@ _DAST_WORDS = ("zap", "nuclei", "nikto", "strix", "dast")
 _MOBILE_WORDS = ("mobsf",)
 _SAST_WORDS = ("opengrep", "semgrep", "bandit", "codeql", "sonar", "eslint", "gosec", "brakeman", "spotbugs")
 _SCA_WORDS = ("dependency-check", "grype", "osv", "npm audit", "pip-audit", "snyk", "dependabot")
-_IAC_WORDS = ("trivy", "checkov", "kics", "terrascan", "kubescape", "prowler", "hadolint")
+_IAC_WORDS = ("trivy", "checkov", "kics", "terrascan", "kubescape", "prowler", "hadolint", "zizmor")
 
 # The opengrep-rules languages whose security rules TDxGuard's Opengrep loads: RULE_LANGUAGES of
 # cli/tdxguard/engine/tools.py and OPENGREP_RULE_LANGUAGES of the CI templates (a test in

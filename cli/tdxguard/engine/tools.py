@@ -102,16 +102,32 @@ class Tool:
     url: str  # with {version} and {asset}
     assets: Dict[str, Asset]
     binary: str = ""  # the installed executable, without .exe; empty for the rules
+    # A Linux build that runs on musl too (Go's static binaries). False for a build linked
+    # against glibc, which a musl system (Alpine) cannot start.
+    static_linux: bool = True
+    # The scan needs it everywhere. False: a platform without a build of it scans without
+    # it, with a warning, instead of refusing to scan.
+    required: bool = True
 
     def asset_for(self, platform: str) -> Asset:
         """The asset of a platform key; a musl platform falls back to the static glibc-free build."""
-        for key in (platform, platform.replace("-musl", ""), ANY_PLATFORM):
+        keys = [platform, ANY_PLATFORM]
+        if self.static_linux:
+            keys.insert(1, platform.replace("-musl", ""))
+        for key in keys:
             if key in self.assets:
                 return self.assets[key]
         raise ToolError(
             f"{self.name} {self.version} has no build for {PLATFORMS.get(platform, platform)}.",
             "Use the Docker engine instead: tdxguard scan --engine docker",
         )
+
+    def available_for(self, platform: str) -> bool:
+        try:
+            self.asset_for(platform)
+            return True
+        except ToolError:
+            return False
 
     def download_url(self, asset: Asset) -> str:
         return self.url.format(version=self.version, asset=asset.name)
@@ -120,35 +136,36 @@ class Tool:
         return self.binary + (".exe" if platform.startswith("windows") else "")
 
 
-BETTERLEAKS_VERSION = "1.8.1"
-OPENGREP_VERSION = "1.29.0"
+BETTERLEAKS_VERSION = "1.9.0"
+OPENGREP_VERSION = "1.31.0"
 OPENGREP_RULES_SHA = "f1d2b562b414783763fd02a6ed2736eaed622efa"
-TRIVY_VERSION = "0.74.0"
+TRIVY_VERSION = "0.76.0"
+ZIZMOR_VERSION = "1.31.1"
 
 # fmt: off
 TOOLS: Dict[str, Tool] = {
-    # sha256 from https://github.com/betterleaks/betterleaks/releases/download/v1.8.1/checksums.txt
+    # sha256 from https://github.com/betterleaks/betterleaks/releases/download/v1.9.0/checksums.txt
     "betterleaks": Tool(
         name="betterleaks",
         version=BETTERLEAKS_VERSION,
         url="https://github.com/betterleaks/betterleaks/releases/download/v{version}/{asset}",
         binary="betterleaks",
         assets={
-            "darwin-arm64": Asset("betterleaks_1.8.1_darwin_arm64.tar.gz",
-                                  "8e80f33b5f2a7426b390347b9fd466033723cb94b6bdffa7572632e2eaec964e", "betterleaks"),
-            "darwin-x86_64": Asset("betterleaks_1.8.1_darwin_x64.tar.gz",
-                                   "6abc37df76f881cffae406aa2cec72bea6e6ae64b4e771b3ed21b4aac472ed10", "betterleaks"),
-            "linux-x86_64": Asset("betterleaks_1.8.1_linux_x64.tar.gz",
-                                  "efa407244e1ea8e35f582b8a42becdeac08bdead04f68eb752adda722d583c2a", "betterleaks"),
-            "linux-aarch64": Asset("betterleaks_1.8.1_linux_arm64.tar.gz",
-                                   "bbb578b12a2f65d7082ab436abf37724232bc71d8a078e3c41336574420f1b48", "betterleaks"),
-            "windows-x86_64": Asset("betterleaks_1.8.1_windows_x64.zip",
-                                    "94310d028285a1bcce7f160bc19eb62f87de6460c95bfd4319151ef5b501ed3f",
+            "darwin-arm64": Asset("betterleaks_1.9.0_darwin_arm64.tar.gz",
+                                  "83dd7eaab13d44a1e8e347a17064cdef153a1478db473276d41b38d55613d3f2", "betterleaks"),
+            "darwin-x86_64": Asset("betterleaks_1.9.0_darwin_x64.tar.gz",
+                                   "68dfd83458d9e7f90663daa7a81c7f944083b170dae82e4f5f8d0581ed519ef1", "betterleaks"),
+            "linux-x86_64": Asset("betterleaks_1.9.0_linux_x64.tar.gz",
+                                  "f8b185a39ffcece2a1ca82bf3a4e7435cd81963ffd16b7a9128daf75f35f6de7", "betterleaks"),
+            "linux-aarch64": Asset("betterleaks_1.9.0_linux_arm64.tar.gz",
+                                   "1d39116e0a58dc94574715e2aa12a2dbd5062f193eee3fec011fef6ba06bd13b", "betterleaks"),
+            "windows-x86_64": Asset("betterleaks_1.9.0_windows_x64.zip",
+                                    "b765daec9fda475b031b5a5159798cbe4294a3f2a50683cbc0471226e376d3da",
                                     "betterleaks.exe"),
         },
     ),
     # Opengrep publishes no checksum file: sha256 from the asset digests of
-    # `gh api repos/opengrep/opengrep/releases/tags/v1.29.0`.
+    # `gh api repos/opengrep/opengrep/releases/tags/v1.31.0`.
     "opengrep": Tool(
         name="opengrep",
         version=OPENGREP_VERSION,
@@ -156,19 +173,19 @@ TOOLS: Dict[str, Tool] = {
         binary="opengrep",
         assets={
             "darwin-arm64": Asset("opengrep_osx_arm64",
-                                  "dacc12a24e95b22c8b1ab55be1777b6eb877a922c5571a95b9a8de30f3963438"),
+                                  "035dd8fd2410fe68513916df0c2895257fffafcd5314b4a118484ce8db62bedb"),
             "darwin-x86_64": Asset("opengrep_osx_x86",
-                                   "7173bd701491b58e1d1f62c24470ca0be124ecd63885c4d6293cbf71fd706508"),
+                                   "2f0d0c7a41a3e48dc02c30dabc4851bc37c18f021b46c9ae54b15177ece088ee"),
             "linux-x86_64": Asset("opengrep_manylinux_x86",
-                                  "3365ef49d04893e01338d85d9bbd49b2bd5261ad4c9c0df0a6a0f8d44232ae13"),
+                                  "dbbe3c2058dbe600c449a8ba22ea79a1643a6660658400090d0323a8d0d31147"),
             "linux-aarch64": Asset("opengrep_manylinux_aarch64",
-                                   "db3cda6e6e53251a3874e62b7c8493c281508480b3f3b4db554be41583b21174"),
+                                   "2b713a29a00237f85408b83002fc111db5b94c7fa8d263f0a93184a960655d9d"),
             "linux-x86_64-musl": Asset("opengrep_musllinux_x86",
-                                       "1b474bf207905a3cffe4e915fe36895835bc89de2620cb2ffd88ca512d9ea31b"),
+                                       "02c9fba481611aa0664bc79ccf7ce59e9e334b76af8921c80b2f738d17fabf9b"),
             "linux-aarch64-musl": Asset("opengrep_musllinux_aarch64",
-                                        "6cccb7466a98608e308204e17b259f4ca3a9028c6eb71e6b07ea21b89026c484"),
+                                        "b7cbedab0b6c9953ea27ce3baa006ad8b6fa1c50ee7433638b63f7fc731519d9"),
             "windows-x86_64": Asset("opengrep_windows_x86.exe",
-                                    "ee485b31912704dc6410bc43f04b5c6ad896697db56e360a98204abf95fa1025"),
+                                    "fdd2e22549e7000ceb66976a01366db6910760b2aa4e457b6bda62545070d26a"),
         },
     ),
     # The rules at a pinned commit, as GitHub's archive of it. sha256 of that archive, as
@@ -182,23 +199,46 @@ TOOLS: Dict[str, Tool] = {
                                 "9a5f1cd5c625418cc1c776120123e2d4371df9bb66e099426b17c3488e13619d"),
         },
     ),
-    # sha256 from https://github.com/aquasecurity/trivy/releases/download/v0.74.0/trivy_0.74.0_checksums.txt
+    # sha256 from https://github.com/aquasecurity/trivy/releases/download/v0.76.0/trivy_0.76.0_checksums.txt
     "trivy": Tool(
         name="trivy",
         version=TRIVY_VERSION,
         url="https://github.com/aquasecurity/trivy/releases/download/v{version}/{asset}",
         binary="trivy",
         assets={
-            "darwin-arm64": Asset("trivy_0.74.0_macOS-ARM64.tar.gz",
-                                  "1caada5e0e2091909357c7525d3aa76f4b660b13821bc143b190c7483e31cc11", "trivy"),
-            "darwin-x86_64": Asset("trivy_0.74.0_macOS-64bit.tar.gz",
-                                   "472816f6888dda689d075c30254d4210b4d1035acf365aa72332f584c2f60485", "trivy"),
-            "linux-x86_64": Asset("trivy_0.74.0_Linux-64bit.tar.gz",
-                                  "2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a", "trivy"),
-            "linux-aarch64": Asset("trivy_0.74.0_Linux-ARM64.tar.gz",
-                                   "b94ce1976bbf3c15b514b605ee88be7c6d94a29be2302847ff01cb794d47aad5", "trivy"),
-            "windows-x86_64": Asset("trivy_0.74.0_windows-64bit.zip",
-                                    "94c40e0696e4b907a74b7b2e1438d5d72ebaca83115817407f568a002d520842", "trivy.exe"),
+            "darwin-arm64": Asset("trivy_0.76.0_macOS-ARM64.tar.gz",
+                                  "e7ec0d21fe842553f59af99aba2efbcc822369fbaed27019c575408b6d135fce", "trivy"),
+            "darwin-x86_64": Asset("trivy_0.76.0_macOS-64bit.tar.gz",
+                                   "89563d4d495cf4ef06a0d1950f8710b124e9f7bd2615ec6c47b03673f4ad45a2", "trivy"),
+            "linux-x86_64": Asset("trivy_0.76.0_Linux-64bit.tar.gz",
+                                  "e24b1c51293c1b15e4ba8d45bbc7891ba053f90278ec2698f3562c993e145fe7", "trivy"),
+            "linux-aarch64": Asset("trivy_0.76.0_Linux-ARM64.tar.gz",
+                                   "aab21e677a7b7071fc79f1711480840754c18a1b9d9cefa7ccd06af63a0e8f4c", "trivy"),
+            "windows-x86_64": Asset("trivy_0.76.0_windows-64bit.zip",
+                                    "7b4762a5a5326cb4b83dfd2bb5d9aaf15a1ed867c75cad7dd8b38840a28e7be6", "trivy.exe"),
+        },
+    ),
+    # zizmor audits GitHub Actions workflows. It publishes no checksum file: sha256 from the
+    # asset digests of `gh api repos/zizmorcore/zizmor/releases/tags/v1.31.1`. Its Linux
+    # builds link glibc, and there is no musl build: on Alpine the scan runs without it.
+    "zizmor": Tool(
+        name="zizmor",
+        version=ZIZMOR_VERSION,
+        url="https://github.com/zizmorcore/zizmor/releases/download/v{version}/{asset}",
+        binary="zizmor",
+        static_linux=False,
+        required=False,
+        assets={
+            "darwin-arm64": Asset("zizmor-aarch64-apple-darwin.tar.gz",
+                                  "ad5aa633cd56215b11e6c51d51f90c7e6b22904a75047d1215abbd422f61d698", "zizmor"),
+            "darwin-x86_64": Asset("zizmor-x86_64-apple-darwin.tar.gz",
+                                   "72ae63bb85b67229c06242f04195cb43927e9fab5f43803c6434dc701a517d61", "zizmor"),
+            "linux-x86_64": Asset("zizmor-x86_64-unknown-linux-gnu.tar.gz",
+                                  "d185f726bdaf92df78273217dfdd24ebcd6b0ef48cf3ce776ff5762b6e138c99", "zizmor"),
+            "linux-aarch64": Asset("zizmor-aarch64-unknown-linux-gnu.tar.gz",
+                                   "37eebbd5762a44f262d94875431b14a6d2402991e90a685113ea97b8b41be833", "zizmor"),
+            "windows-x86_64": Asset("zizmor-x86_64-pc-windows-msvc.zip",
+                                    "4de30371c8a3b483aecbcf0dec1fd6a2b6aae65051ca226b4f6527baac6a8c7a", "zizmor.exe"),
         },
     ),
 }
@@ -287,6 +327,8 @@ class Toolset:
     opengrep: Path
     trivy: Path
     rules: Path
+    # None where it has no build (Linux with musl).
+    zizmor: Optional[Path] = None
 
     @staticmethod
     def versions() -> Dict[str, str]:
@@ -296,6 +338,7 @@ class Toolset:
             "opengrep": OPENGREP_VERSION,
             "opengrep_rules": OPENGREP_RULES_SHA,
             "trivy": TRIVY_VERSION,
+            "zizmor": ZIZMOR_VERSION,
         }
 
 
@@ -303,8 +346,11 @@ def installed(tool: Tool, platform: str, root: Path) -> Optional[Path]:
     """
     The install directory when it holds this tool for this platform. The marker records
     the asset's checksum: a cache shared with another platform (a network home, Rosetta)
-    or left by an older pin does not count as installed.
+    or left by an older pin does not count as installed. None as well for a tool without a
+    build for the platform.
     """
+    if not tool.available_for(platform):
+        return None
     directory = install_dir(tool, root)
     try:
         with open(directory / MARKER, encoding="utf-8") as f:
@@ -324,7 +370,11 @@ def installed(tool: Tool, platform: str, root: Path) -> Optional[Path]:
 
 def toolset(platform: str, root: Path) -> Toolset:
     """The installed tools; ToolError naming the missing ones."""
-    missing = [name for name, tool in TOOLS.items() if installed(tool, platform, root) is None]
+    missing = [
+        name
+        for name, tool in TOOLS.items()
+        if (tool.required or tool.available_for(platform)) and installed(tool, platform, root) is None
+    ]
     if missing:
         raise ToolError(
             f"Not installed in {root}: {', '.join(missing)}.",
@@ -343,12 +393,16 @@ def _toolset(platform: str, root: Path) -> Toolset:
         opengrep=binary("opengrep"),
         trivy=binary("trivy"),
         rules=install_dir(TOOLS["opengrep-rules"], root),
+        zizmor=binary("zizmor") if "zizmor" in TOOLS and TOOLS["zizmor"].available_for(platform) else None,
     )
 
 
 def ensure(platform: str, root: Path, log: Log = _no_log, downloader: Optional[Callable] = None) -> Toolset:
     """Installs what is missing, then returns the toolset."""
     for tool in TOOLS.values():
+        if not tool.required and not tool.available_for(platform):
+            log(f"{tool.name} {tool.version} has no build for {PLATFORMS.get(platform, platform)}: not installed")
+            continue
         if installed(tool, platform, root) is None:
             install(tool, platform, root, log=log, downloader=downloader)
     return _toolset(platform, root)

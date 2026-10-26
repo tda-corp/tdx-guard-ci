@@ -175,17 +175,57 @@ def rule_files(rules: Path, framework: str) -> list[Path]:
     return files
 
 
+def below(directory: str, pattern: str) -> str:
+    """An include pattern of a rule, limited to a directory: "*.html" -> "apps/api/**/*.html"."""
+    pattern = pattern.strip().strip("\"'").lstrip("/")
+    return f"{directory}/{pattern}" if pattern.startswith("**/") else f"{directory}/**/{pattern}"
+
+
+def is_item(line: str, deeper_than: int) -> bool:
+    """A YAML list item indented more than `deeper_than` spaces."""
+    return line.lstrip().startswith("- ") and len(line) - len(line.lstrip()) > deeper_than
+
+
 def confine(text: str, directories: list[str]) -> str:
-    # Insert `paths.include` under every `- id:` of the file, at the rule's own indent.
-    out = []
-    for line in text.splitlines():
-        out.append(line)
-        match = RULE_ID.match(line)
-        if match:
-            indent = match.group(1) + "  "
+    # Limit every rule of the file to the directories, at the rule's own indent. A rule that
+    # has a `paths:` of its own keeps it: a second `paths:` key is a duplicate key, and
+    # Opengrep then rejects the whole configuration and scans nothing at all (exit 7, which
+    # the scan step took for a warning). django-no-csrf-token has `include: ["*.html"]`, and a
+    # Django API in a subdirectory, tda-plane's apps/api/, had no SAST for that reason. Its
+    # include patterns are moved below each directory instead ("apps/api/**/*.html"):
+    # include patterns are alternatives, so a second list would widen the rule, not narrow it.
+    lines = text.splitlines()
+    starts = [i for i, line in enumerate(lines) if RULE_ID.match(line)]
+    out = lines[: starts[0]] if starts else lines
+    for n, start in enumerate(starts):
+        block = lines[start : starts[n + 1] if n + 1 < len(starts) else len(lines)]
+        indent = RULE_ID.match(block[0]).group(1) + "  "
+        paths = next((i for i, line in enumerate(block) if line == f"{indent}paths:"), None)
+        if paths is None:
+            out.append(block[0])
             out.append(f"{indent}paths:")
             out.append(f"{indent}  include:")
             out += [f'{indent}  - "{directory}/**"' for directory in directories]
+            out += block[1:]
+            continue
+        include = next(
+            (i for i in range(paths + 1, len(block)) if block[i] == f"{indent}  include:"),
+            None,
+        )
+        if include is None:
+            out += block[: paths + 1]
+            out.append(f"{indent}  include:")
+            out += [f'{indent}    - "{directory}/**"' for directory in directories]
+            out += block[paths + 1 :]
+            continue
+        out += block[: include + 1]
+        i = include + 1
+        while i < len(block) and is_item(block[i], deeper_than=len(indent) + 2):
+            item_indent = block[i][: len(block[i]) - len(block[i].lstrip())]
+            pattern = block[i].lstrip()[2:]
+            out += [f'{item_indent}- "{below(directory, pattern)}"' for directory in directories]
+            i += 1
+        out += block[i:]
     return "\n".join(out) + "\n"
 
 

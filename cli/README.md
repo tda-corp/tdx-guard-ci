@@ -257,7 +257,7 @@ $ tdxguard scan
   Trivy (image `tdxguard-local/docker-api:scan`)       31       4
   Trivy (image secrets) [docker-api]                    0       0
 
-  Engine:  docker (scanner image v1.1.0; betterleaks 1.8.1, opengrep 1.29.0, trivy 0.74.0)
+  Engine:  docker (scanner image v1.1.0; betterleaks 1.9.0, opengrep 1.31.0, trivy 0.76.0)
   Reports: /home/jane/.cache/tdxguard/reports/tdx-scribe
 
 > Uploading to https://guard.tdadevelop.com
@@ -275,7 +275,8 @@ The scan runs these steps:
 1. It reads `.tdxguard.yml` from the git root and picks the engine.
 2. It builds each Dockerfile image with `docker build -f <dockerfile> -t tdxguard-local/<name>:scan <context>`.
    Registry images (`ref:`) are not built.
-3. It runs Betterleaks, Opengrep and Trivy, and Trivy again for each image: in the scanner
+3. It runs Betterleaks, Opengrep and Trivy, zizmor where the repository has GitHub Actions
+   workflows, and Trivy again for each image: in the scanner
    image `ghcr.io/tda-corp/tdxguard-scanner:v1` with the repository mounted read-only (docker
    engine), or as programs on this machine (native engine). Both run the same code.
 4. It prints the summary, the engine that ran and where the reports are.
@@ -436,15 +437,16 @@ those `images:` entries are skipped with a warning, and the scan goes on. Regist
 (`ref:`) are scanned without Docker. When Docker is there, the native engine still builds
 the Dockerfile images and Trivy reads them from the daemon.
 
-**The tools cache.** On first use the native engine downloads Betterleaks 1.8.1, Opengrep
-1.29.0 with its rules (opengrep-rules at a pinned commit, only the security directories of
-the languages listed under `doctor` above, as in CI) and Trivy 0.74.0 into
+**The tools cache.** On first use the native engine downloads Betterleaks 1.9.0, Opengrep
+1.31.0 with its rules (opengrep-rules at a pinned commit, only the security directories of
+the languages listed under `doctor` above, as in CI), Trivy 0.76.0 and zizmor 1.31.1 into
 `~/.cache/tdxguard/tools/<tool>/<version>/` (or `$TDXGUARD_TOOLS_DIR`), about 250 MB. The
 rules' install records that language list: when an upgrade changes it (0.1.3 added PHP, Java,
 Kotlin, Scala, Ruby, C# and C), the 1 MB rules archive is downloaded and extracted again. Every download is checked against a sha256 pinned in the
 package (`tdxguard/engine/tools.py`, the same table the scanner image is built from) before
 anything is unpacked, and moved into place only when complete. On Linux, Opengrep's musl
-build is used on Alpine and its glibc (manylinux) build elsewhere. Trivy's database is shared
+build is used on Alpine and its glibc (manylinux) build elsewhere. zizmor has no musl build:
+on Alpine the scan runs without it and says so in its warnings. Trivy's database is shared
 with the docker engine in `~/.cache/tdxguard/scanner`.
 
 | Command | |

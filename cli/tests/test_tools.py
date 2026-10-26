@@ -93,17 +93,17 @@ class TestPlatform(unittest.TestCase):
             ("opengrep", "linux-x86_64-musl"): "opengrep_musllinux_x86",
             ("opengrep", "linux-aarch64-musl"): "opengrep_musllinux_aarch64",
             ("opengrep", "windows-x86_64"): "opengrep_windows_x86.exe",
-            ("trivy", "darwin-arm64"): "trivy_0.74.0_macOS-ARM64.tar.gz",
-            ("trivy", "darwin-x86_64"): "trivy_0.74.0_macOS-64bit.tar.gz",
-            ("trivy", "linux-x86_64"): "trivy_0.74.0_Linux-64bit.tar.gz",
+            ("trivy", "darwin-arm64"): "trivy_0.76.0_macOS-ARM64.tar.gz",
+            ("trivy", "darwin-x86_64"): "trivy_0.76.0_macOS-64bit.tar.gz",
+            ("trivy", "linux-x86_64"): "trivy_0.76.0_Linux-64bit.tar.gz",
             # Trivy and Betterleaks are static Go binaries: musl uses the same build.
-            ("trivy", "linux-aarch64-musl"): "trivy_0.74.0_Linux-ARM64.tar.gz",
-            ("trivy", "windows-x86_64"): "trivy_0.74.0_windows-64bit.zip",
-            ("betterleaks", "darwin-arm64"): "betterleaks_1.8.1_darwin_arm64.tar.gz",
-            ("betterleaks", "darwin-x86_64"): "betterleaks_1.8.1_darwin_x64.tar.gz",
-            ("betterleaks", "linux-x86_64-musl"): "betterleaks_1.8.1_linux_x64.tar.gz",
-            ("betterleaks", "linux-aarch64"): "betterleaks_1.8.1_linux_arm64.tar.gz",
-            ("betterleaks", "windows-x86_64"): "betterleaks_1.8.1_windows_x64.zip",
+            ("trivy", "linux-aarch64-musl"): "trivy_0.76.0_Linux-ARM64.tar.gz",
+            ("trivy", "windows-x86_64"): "trivy_0.76.0_windows-64bit.zip",
+            ("betterleaks", "darwin-arm64"): "betterleaks_1.9.0_darwin_arm64.tar.gz",
+            ("betterleaks", "darwin-x86_64"): "betterleaks_1.9.0_darwin_x64.tar.gz",
+            ("betterleaks", "linux-x86_64-musl"): "betterleaks_1.9.0_linux_x64.tar.gz",
+            ("betterleaks", "linux-aarch64"): "betterleaks_1.9.0_linux_arm64.tar.gz",
+            ("betterleaks", "windows-x86_64"): "betterleaks_1.9.0_windows_x64.zip",
             ("opengrep-rules", "windows-x86_64"): "f1d2b562b414783763fd02a6ed2736eaed622efa.tar.gz",
         }
         for (name, platform), asset in expected.items():
@@ -119,7 +119,7 @@ class TestPlatform(unittest.TestCase):
     def test_urls(self):
         trivy = tools.TOOLS["trivy"]
         self.assertEqual(
-            "https://github.com/aquasecurity/trivy/releases/download/v0.74.0/trivy_0.74.0_Linux-64bit.tar.gz",
+            "https://github.com/aquasecurity/trivy/releases/download/v0.76.0/trivy_0.76.0_Linux-64bit.tar.gz",
             trivy.download_url(trivy.asset_for("linux-x86_64")),
         )
         rules = tools.TOOLS["opengrep-rules"]
@@ -134,6 +134,11 @@ class TestPinnedTable(unittest.TestCase):
         for platform in tools.PLATFORMS:
             for tool in tools.TOOLS.values():
                 with self.subTest(platform=platform, tool=tool.name):
+                    if not tool.required and not tool.available_for(platform):
+                        # An optional tool may lack a build for musl only (zizmor links glibc).
+                        self.assertTrue(platform.endswith("-musl"))
+                        self.assertIsNone(tools.installed(tool, platform, Path("/nonexistent")))
+                        continue
                     asset = tool.asset_for(platform)
                     self.assertRegex(asset.sha256, r"^[0-9a-f]{64}$")
                     if tool.binary:
@@ -160,6 +165,25 @@ class TestPinnedTable(unittest.TestCase):
                     self.assertEqual({pinned}, found)
 
     @unittest.skipUnless((REPOSITORY / "ci-templates").is_dir(), "ci-templates/ is not next to the package")
+    def test_zizmor_matches_the_github_template(self):
+        """The GitHub template downloads the same zizmor and checks the same checksums (GitLab runs none)."""
+        text = (REPOSITORY / "ci-templates" / "github" / "tdxguard.yml").read_text(encoding="utf-8")
+        zizmor = tools.TOOLS["zizmor"]
+        pins = {
+            "ZIZMOR_VERSION": tools.ZIZMOR_VERSION,
+            "ZIZMOR_SHA256_X86_64": zizmor.assets["linux-x86_64"].sha256,
+            "ZIZMOR_SHA256_AARCH64": zizmor.assets["linux-aarch64"].sha256,
+        }
+        for variable, pinned in pins.items():
+            with self.subTest(variable=variable):
+                self.assertEqual([pinned], re.findall(rf'^\s*{variable}:\s*"([^"]+)"', text, re.MULTILINE))
+
+    def test_a_musl_system_scans_without_zizmor(self):
+        self.assertFalse(tools.TOOLS["zizmor"].available_for("linux-x86_64-musl"))
+        self.assertTrue(tools.TOOLS["trivy"].available_for("linux-x86_64-musl"))
+        self.assertTrue(tools.TOOLS["zizmor"].available_for("linux-x86_64"))
+
+    @unittest.skipUnless((REPOSITORY / "ci-templates").is_dir(), "ci-templates/ is not next to the package")
     def test_the_image_takes_its_tools_from_this_table(self):
         dockerfile = (REPOSITORY / "ci-templates" / "scanner" / "Dockerfile").read_text(encoding="utf-8")
         self.assertIn("python3 -P -m tdxguard.engine.tools install", dockerfile)
@@ -177,7 +201,7 @@ class TestLocations(unittest.TestCase):
 
     def test_install_dir_is_tool_and_version(self):
         root = Path("tools-root")
-        self.assertEqual(root / "trivy" / "0.74.0", tools.install_dir(tools.TOOLS["trivy"], root))
+        self.assertEqual(root / "trivy" / "0.76.0", tools.install_dir(tools.TOOLS["trivy"], root))
         self.assertEqual(
             root / "opengrep-rules" / tools.OPENGREP_RULES_SHA, tools.install_dir(tools.TOOLS["opengrep-rules"], root)
         )
@@ -455,7 +479,7 @@ class TestQuarantineAndCheck(unittest.TestCase):
         self.assertEqual([["xattr", "-p"]], calls)
 
     def test_opengrep_check(self):
-        good = subprocess.CompletedProcess([], 0, stdout="1.29.0\n", stderr="")
+        good = subprocess.CompletedProcess([], 0, stdout="1.31.0\n", stderr="")
         bad = subprocess.CompletedProcess([], 0, stdout="1.12.0\n", stderr="")
         with patch("subprocess.run", return_value=good):
             tools.check_opengrep(Path("opengrep"))
