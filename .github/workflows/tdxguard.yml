@@ -2227,11 +2227,15 @@ jobs:
       image_hint: ${{ steps.dockerfiles.outputs.hint }}
     env:
       TRIVY_VERSION: "0.76.0"
-      # zizmor publishes no checksum file: the sha256 are the asset digests of the release,
-      # the same as in cli/tdxguard/engine/tools.py (a test fails when they differ).
+      # zizmor's musllinux wheel from PyPI, not the release's linux-gnu build: that one needs
+      # glibc 2.34 and failed on the self-hosted runners ("GLIBC_2.34 not found"); the musl build
+      # is static-pie and runs on any Linux. URLs and sha256 as in cli/tdxguard/engine/tools.py
+      # (a test fails when they differ).
       ZIZMOR_VERSION: "1.31.1"
-      ZIZMOR_SHA256_X86_64: "d185f726bdaf92df78273217dfdd24ebcd6b0ef48cf3ce776ff5762b6e138c99"
-      ZIZMOR_SHA256_AARCH64: "37eebbd5762a44f262d94875431b14a6d2402991e90a685113ea97b8b41be833"
+      ZIZMOR_URL_X86_64: "https://files.pythonhosted.org/packages/ba/48/a9b5bf90d2ac6db62c133e5e7a06b120dc2bf1f55addc88e363d9342c9fb/zizmor-1.31.1-py3-none-musllinux_1_2_x86_64.whl"
+      ZIZMOR_SHA256_X86_64: "e7fdf82d31cc67eb1d5030bf2372b25ee2a1c3ad05017e18da70ed138c4accd6"
+      ZIZMOR_URL_AARCH64: "https://files.pythonhosted.org/packages/2c/53/0841490dde334d8ecf590c008922d942da8bbb51a053ad61fd596591465f/zizmor-1.31.1-py3-none-musllinux_1_2_aarch64.whl"
+      ZIZMOR_SHA256_AARCH64: "c5ccb17fd820bb1ddc63cc9a715e97c063025487e585f640389a86d9dfc97cda"
       # Trivy gives up after 5 minutes by default ("context deadline exceeded"), which an
       # image of a few GB read out of the Docker daemon does not make on a busy runner.
       TRIVY_TIMEOUT: "30m"
@@ -2364,17 +2368,18 @@ jobs:
             exit 0
           fi
           case "$(uname -m)" in
-            x86_64)        ZARCH=x86_64;  ZSHA="$ZIZMOR_SHA256_X86_64" ;;
-            aarch64|arm64) ZARCH=aarch64; ZSHA="$ZIZMOR_SHA256_AARCH64" ;;
+            x86_64)        ZURL="$ZIZMOR_URL_X86_64";  ZSHA="$ZIZMOR_SHA256_X86_64" ;;
+            aarch64|arm64) ZURL="$ZIZMOR_URL_AARCH64"; ZSHA="$ZIZMOR_SHA256_AARCH64" ;;
             *) echo "::error::zizmor publishes no binary for $(uname -m)"; exit 1 ;;
           esac
-          ZTAR="zizmor-${ZARCH}-unknown-linux-gnu.tar.gz"
           # Only where curl knows it; see the betterleaks download.
           RETRY_ALL=; curl -s --retry-all-errors -o /dev/null file:///dev/null 2>/dev/null && RETRY_ALL=--retry-all-errors
-          curl -sSfL --retry 5 $RETRY_ALL --retry-delay 2 -o "$RUNNER_TEMP/$ZTAR" \
-            "https://github.com/zizmorcore/zizmor/releases/download/v${ZIZMOR_VERSION}/$ZTAR"
-          echo "$ZSHA  $RUNNER_TEMP/$ZTAR" | sha256sum -c -
-          tar -xzf "$RUNNER_TEMP/$ZTAR" -C "$RUNNER_TEMP" zizmor
+          curl -sSfL --retry 5 $RETRY_ALL --retry-delay 2 -o "$RUNNER_TEMP/zizmor.whl" "$ZURL"
+          echo "$ZSHA  $RUNNER_TEMP/zizmor.whl" | sha256sum -c -
+          # A wheel is a zip; python3 rather than unzip, which a runner may not have.
+          python3 -c 'import sys, zipfile; open(sys.argv[2], "wb").write(zipfile.ZipFile(sys.argv[1]).read("zizmor-" + sys.argv[3] + ".data/scripts/zizmor"))' \
+            "$RUNNER_TEMP/zizmor.whl" "$RUNNER_TEMP/zizmor" "$ZIZMOR_VERSION"
+          chmod +x "$RUNNER_TEMP/zizmor"
           CFG=()
           if [ ! -f zizmor.yml ] && [ ! -f zizmor.yaml ] && [ ! -f .github/zizmor.yml ] && [ ! -f .github/zizmor.yaml ]; then
             printf '%s' "$ZIZMOR_DEFAULT_CONFIG" > "$RUNNER_TEMP/zizmor.yml"
