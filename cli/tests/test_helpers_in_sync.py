@@ -4,6 +4,7 @@ as heredocs. These tests keep every embedded copy byte-identical to its one sour
 
   sarif-enrich.py, opengrep-prune-rules.py  cli/tdxguard/engine/helpers/ (the engine runs them)
   mobsf-scan.py                             cli/tdxguard/engine/helpers/ (tdxguard scan imports it)
+  tdxguard-rules.yaml                       cli/tdxguard/engine/helpers/ (TDxGuard's own Opengrep rules)
   zen-collector.py, tdxguard-lib.sh         ci-templates/
 
 After changing a source, paste it into the heredocs of both templates (indented like the
@@ -23,6 +24,7 @@ SOURCES = {
     "sarif-enrich.py": helpers.SARIF_ENRICH,
     "opengrep-prune-rules.py": helpers.OPENGREP_PRUNE_RULES,
     "mobsf-scan.py": helpers.MOBSF_SCAN,
+    "tdxguard-rules.yaml": helpers.TDXGUARD_RULES,
     "zen-collector.py": TEMPLATES / "zen-collector.py",
     "tdxguard-lib.sh": TEMPLATES / "tdxguard-lib.sh",
 }
@@ -33,9 +35,10 @@ EMBEDDED = {
         "opengrep-prune-rules.py",
         "zen-collector.py",
         "mobsf-scan.py",
+        "tdxguard-rules.yaml",
         "tdxguard-lib.sh",
     ],
-    "gitlab/tdxguard.yml": ["sarif-enrich.py", "opengrep-prune-rules.py", "zen-collector.py"],
+    "gitlab/tdxguard.yml": ["sarif-enrich.py", "opengrep-prune-rules.py", "zen-collector.py", "tdxguard-rules.yaml"],
 }
 
 
@@ -77,6 +80,23 @@ class TestEmbeddedCopies(unittest.TestCase):
                 found = re.findall(r'OPENGREP_RULE_LANGUAGES[:=] ?"([^"]+)"', text)
                 self.assertEqual([" ".join(RULE_LANGUAGES)], found, f"ci-templates/{script}")
 
+    def test_own_rules_are_loaded_and_trimmed_in_the_templates(self):
+        """Every Opengrep run of the templates loads TDxGuard's own rules and trims their ids, as the CLI does."""
+        root = helpers.TDXGUARD_RULES_ROOT
+        # A GitHub expression in a rule would be evaluated inside the template's run block.
+        self.assertNotIn("${{", helpers.TDXGUARD_RULES.read_text(encoding="utf-8"))
+        for script in ("github/tdxguard.yml", "gitlab/tdxguard.yml", "local/tdxguard-scan.sh"):
+            with self.subTest(script=script):
+                text = (TEMPLATES / script).read_text(encoding="utf-8")
+                # Copied below a directory named like the root ...
+                copies = [line for line in text.splitlines() if line.strip().startswith("cp ") and "rules" in line]
+                self.assertTrue(any(f"/{root}" in line for line in copies), f"ci-templates/{script}")
+                # ... and every trimming of the ids keeps it.
+                roots = [line for line in text.splitlines() if '--rule-roots "' in line]
+                self.assertTrue(roots, f"ci-templates/{script} trims no rule ids")
+                for line in roots:
+                    self.assertIn(f',{root}"', line, f"ci-templates/{script}")
+
     def test_betterleaks_default_config_matches_the_templates(self):
         """A repository without a secrets config gets the same allowlist from the CLI and from CI."""
         from tdxguard.engine.scan import BETTERLEAKS_DEFAULT_CONFIG
@@ -89,6 +109,17 @@ class TestEmbeddedCopies(unittest.TestCase):
                 indent = len(match.group(1)) + 2
                 block = "".join(line[indent:] or "\n" for line in match.group(2).splitlines(keepends=True))
                 self.assertEqual(BETTERLEAKS_DEFAULT_CONFIG, block, f"ci-templates/{template}")
+
+    def test_zizmor_default_config_matches_the_github_template(self):
+        """A repository without a zizmor.yml gets the same pinning policy from the CLI and from CI."""
+        from tdxguard.engine.scan import ZIZMOR_DEFAULT_CONFIG
+
+        text = (TEMPLATES / "github" / "tdxguard.yml").read_text(encoding="utf-8")
+        match = re.search(r"^( +)ZIZMOR_DEFAULT_CONFIG: \|\n((?:\1 +.*\n|\n)+)", text, re.MULTILINE)
+        self.assertIsNotNone(match, "ci-templates/github/tdxguard.yml no longer sets ZIZMOR_DEFAULT_CONFIG")
+        indent = len(match.group(1)) + 2
+        block = "".join(line[indent:] or "\n" for line in match.group(2).splitlines(keepends=True))
+        self.assertEqual(ZIZMOR_DEFAULT_CONFIG, block)
 
     def test_opengrep_skips_vendored_dirs_in_the_templates(self):
         """Every Opengrep run in the templates excludes the directories the CLI excludes as vendored."""

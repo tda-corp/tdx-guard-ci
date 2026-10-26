@@ -66,6 +66,32 @@ class TestPruneRules(unittest.TestCase):
         self.assertNotIn("paths:", (self.rules / DJANGO_CSRF).read_text())
         self.assertIn("django name-only rules (1): whole repository", output)
 
+    def test_a_rule_with_paths_of_its_own_keeps_them_below_the_directory(self):
+        # The real django-no-csrf-token has `paths: include: ["*.html"]`. A second `paths:` key
+        # made Opengrep reject the whole configuration and scan nothing (tda-plane, apps/api/).
+        (self.rules / DJANGO_CSRF).write_text(
+            "rules:\n  - id: django-no-csrf-token\n    pattern: <form>\n    languages: [generic]\n"
+            '    paths:\n      include:\n        - "*.html"\n        - "**/templates/*.txt"\n'
+            "      exclude:\n        - tests\n    severity: WARNING\n"
+        )
+        self.write("apps/api/requirements.txt", "Django==5.2\n")
+        self.write("apps/web/package.json", '{"dependencies": {"next": "16"}}')
+        self.run_prune()
+        text = (self.rules / DJANGO_CSRF).read_text()
+        self.assertEqual(1, text.count("paths:"), text)
+        self.assertIn('        - "apps/api/**/*.html"\n        - "apps/api/**/templates/*.txt"\n', text)
+        self.assertIn("      exclude:\n        - tests\n    severity: WARNING\n", text)
+
+    def test_a_rule_with_only_an_exclude_gets_an_include(self):
+        (self.rules / DJANGO_CSRF).write_text(
+            "rules:\n- id: django-no-csrf-token\n  pattern: <form>\n  paths:\n    exclude:\n      - tests\n"
+        )
+        self.write("apps/api/requirements.txt", "Django==5.2\n")
+        self.run_prune()
+        text = (self.rules / DJANGO_CSRF).read_text()
+        self.assertEqual(1, text.count("paths:"), text)
+        self.assertIn('  paths:\n    include:\n      - "apps/api/**"\n    exclude:\n      - tests\n', text)
+
 
 if __name__ == "__main__":
     unittest.main()

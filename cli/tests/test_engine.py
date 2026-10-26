@@ -272,6 +272,12 @@ class TestScan(EngineTestCase):
         self.assertIn("generic/nginx/security/alias-path-traversal.yaml", loaded)
         self.assertFalse([path for path in loaded if path.startswith("generic/secrets/")], loaded)
         self.assertTrue((self.toolset.rules / "generic" / "secrets" / "security").is_dir())
+        # TDxGuard's own rules sit next to them, below the directory their ids are trimmed to.
+        self.assertIn("tdxguard-rules/tdxguard-rules.yaml", loaded)
+        opengrep = next(call for call in self.calls() if call[0] == "opengrep")
+        enrich_roots = scan.OPENGREP_RULE_ROOTS.split(",")
+        self.assertEqual("tdxguard-rules", enrich_roots[-1])
+        self.assertIn("--config", opengrep)
         # The pruning works on a copy; the installed rules stay as they are.
         self.assertTrue(
             (
@@ -345,11 +351,82 @@ class TestScan(EngineTestCase):
         self.assertFalse((self.out / "trivy.sarif").exists())
 
 
+FAKE_ZIZMOR = r"""
+import json, os, sys
+args = sys.argv[1:]
+with open(os.environ["FAKE_LOG"], "a") as log:
+    log.write(json.dumps(["zizmor"] + args) + "\n")
+if "--config" in args:
+    with open(os.environ["FAKE_LOG"] + ".zizmor", "w") as config:
+        config.write(open(args[args.index("--config") + 1]).read())
+print(" INFO zizmor: completed", file=sys.stderr)
+rule = {"id": "zizmor/unpinned-uses", "name": "unpinned-uses"}
+result = {"ruleId": rule["id"], "level": "error", "kind": "fail", "message": {"text": "unpinned"}}
+print(json.dumps({"version": "2.1.0", "runs": [{"tool": {"driver": {"name": "zizmor", "rules": [rule]}},
+                                                "results": [result, dict(result, level="warning")]}]}))
+"""
+
+
+class TestZizmor(EngineTestCase):
+    def setUp(self):
+        super().setUp()
+        zizmor = self.tmp / "bin" / "zizmor"
+        zizmor.write_text(f"#!{sys.executable}\n" + FAKE_ZIZMOR)
+        zizmor.chmod(zizmor.stat().st_mode | stat.S_IXUSR)
+        self.toolset.zizmor = zizmor
+
+    def scan_only_zizmor(self):
+        return self.run_scan(skips=["betterleaks", "opengrep", "trivy"])
+
+    def test_nothing_to_audit_without_workflows(self):
+        self.assertEqual(0, self.scan_only_zizmor())
+        self.assertEqual([], self.calls())
+        self.assertFalse((self.out / "zizmor.sarif").exists())
+
+    def test_workflows_are_audited_offline_with_the_default_config(self):
+        (self.src / ".github" / "workflows").mkdir(parents=True)
+        (self.src / ".github" / "workflows" / "ci.yml").write_text("on: push\n")
+        self.assertEqual(0, self.scan_only_zizmor(), self.messages)
+        call = self.calls()[0]
+        self.assertEqual(["zizmor", "--offline", "--no-progress", "--no-exit-codes", "--format", "sarif"], call[:6])
+        self.assertEqual(scan.ZIZMOR_DEFAULT_CONFIG, Path(f"{self.log}.zizmor").read_text())
+        self.assertEqual(
+            "zizmor", json.loads((self.out / "zizmor.sarif").read_text())["runs"][0]["tool"]["driver"]["name"]
+        )
+        self.assertIn(" INFO zizmor: completed", self.output)
+        row = self.summary()["rows"][0]
+        self.assertEqual(("zizmor", "zizmor (GitHub Actions)", 2, 1), (row["scanner"], row["label"], row["findings"],
+                                                                        row["severe"]))  # fmt: skip
+        self.assertIn("zizmor.sarif", [upload.path.name for upload in reports.upload_plan(self.out, {})])
+
+    def test_the_repository_config_wins(self):
+        (self.src / ".github" / "workflows").mkdir(parents=True)
+        (self.src / ".github" / "zizmor.yml").write_text("rules: {}\n")
+        self.scan_only_zizmor()
+        self.assertNotIn("--config", self.calls()[0])
+
+    def test_no_build_for_this_platform_is_a_warning(self):
+        (self.src / ".github" / "workflows").mkdir(parents=True)
+        self.toolset.zizmor = None
+        self.assertEqual(0, self.scan_only_zizmor())
+        self.assertEqual(["zizmor has no build for this platform: the GitHub Actions workflows are not audited"],
+                         self.summary()["warnings"])  # fmt: skip
+
+    def test_a_failure_is_an_error(self):
+        (self.src / ".github" / "workflows").mkdir(parents=True)
+        self.toolset.zizmor.write_text(f"#!{sys.executable}\nimport sys\nsys.exit(2)\n")
+        self.assertEqual(1, self.scan_only_zizmor())
+        self.assertFalse((self.out / "zizmor.sarif").exists())
+        self.assertEqual(["zizmor failed (exit status 2)"], self.summary()["errors"])
+
+
 class TestEnvironment(unittest.TestCase):
     def test_log_only_settings_and_locale(self):
         environment = scan.scanner_environment({"LANG": "C"}, platform="linux")
         self.assertEqual("true", environment["TRIVY_NO_PROGRESS"])
         self.assertEqual("true", environment["TRIVY_SKIP_VERSION_CHECK"])
+        self.assertEqual("30m", environment["TRIVY_TIMEOUT"])
+        self.assertEqual("1h", scan.scanner_environment({"TRIVY_TIMEOUT": "1h"})["TRIVY_TIMEOUT"])
         self.assertEqual("C.UTF-8", environment["LC_ALL"])
         self.assertEqual("en_US.UTF-8", scan.scanner_environment({}, platform="darwin")["LC_ALL"])
         self.assertNotIn("LC_ALL", scan.scanner_environment({"LANG": "de_DE.UTF-8"}, platform="linux"))
@@ -404,7 +481,7 @@ class TestContainerArguments(unittest.TestCase):
             ("--image", "nослаг"): "--image expects <ref>=<slug>",
             ("--image", "=x"): "--image has an empty reference",
             ("--image", "a=Bad"): "--image slug must match",
-            ("--skip", "zap"): "--skip expects betterleaks, opengrep, trivy or image, got: zap",
+            ("--skip", "zap"): "--skip expects betterleaks, opengrep, trivy, zizmor or image, got: zap",
             ("--secrets-mode", "all"): "--secrets-mode expects dir or git",
             ("--bogus",): "unknown option: --bogus",
         }

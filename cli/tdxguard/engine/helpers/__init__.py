@@ -14,3 +14,7 @@ HELPERS = Path(__file__).resolve().parent
 SARIF_ENRICH = HELPERS / "sarif_enrich.py"
 OPENGREP_PRUNE_RULES = HELPERS / "opengrep_prune_rules.py"
 MOBSF_SCAN = HELPERS / "mobsf_scan.py"
+# TDxGuard's own Opengrep rules, embedded in both templates as `tdxguard-rules.yaml`. The scan
+# puts them below a directory of this name, which sarif-enrich.py's --rule-roots trims to.
+TDXGUARD_RULES = HELPERS / "tdxguard_rules.yaml"
+TDXGUARD_RULES_ROOT = "tdxguard-rules"

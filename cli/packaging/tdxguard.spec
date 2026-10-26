@@ -20,6 +20,8 @@ a = Analysis(  # noqa: F821
     datas=[
         (str(HELPERS / "sarif_enrich.py"), "tdxguard/engine/helpers"),
         (str(HELPERS / "opengrep_prune_rules.py"), "tdxguard/engine/helpers"),
+        # TDxGuard's own Opengrep rules, which the scan copies next to the community rules.
+        (str(HELPERS / "tdxguard_rules.yaml"), "tdxguard/engine/helpers"),
     ],
     # The helpers run from the data files above, which PyInstaller does not analyse; importing
     # them as modules pulls in the standard library modules they need (html, fnmatch, ...).

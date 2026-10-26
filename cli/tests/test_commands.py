@@ -41,7 +41,7 @@ class TestArguments(unittest.TestCase):
             ["opengrep", "trivy"], commands.resolve_skips(self.parse(["scan", "--skip", "opengrep", "--skip", "trivy"]))
         )
         self.assertEqual(
-            ["betterleaks", "opengrep", "trivy", "mobile"],
+            ["betterleaks", "opengrep", "trivy", "zizmor", "mobile"],
             commands.resolve_skips(self.parse(["scan", "--image-only"])),
         )
         self.assertEqual(
@@ -601,7 +601,8 @@ class TestToolsCommand(EnvironmentTestCase):
         listing = json.loads(out)
         self.assertEqual(str(self.home / "tools"), listing["directory"])
         self.assertEqual(
-            ["betterleaks", "opengrep", "opengrep-rules", "trivy"], [entry["tool"] for entry in listing["tools"]]
+            ["betterleaks", "opengrep", "opengrep-rules", "trivy", "zizmor"],
+            [entry["tool"] for entry in listing["tools"]],
         )
         self.assertEqual({"missing"}, {entry["state"] for entry in listing["tools"]})
 

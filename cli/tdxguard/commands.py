@@ -556,7 +556,7 @@ def imports_licenses(branch: str, sbom: bool) -> bool:
 def resolve_skips(args: argparse.Namespace) -> List[str]:
     skips = list(dict.fromkeys(args.skip or []))
     if args.image_only:
-        skips = ["betterleaks", "opengrep", "trivy", "mobile"]
+        skips = ["betterleaks", "opengrep", "trivy", "zizmor", "mobile"]
     if args.no_images and "image" not in skips:
         skips.append("image")
     return skips
@@ -934,7 +934,9 @@ def _print_summary(ui: UI, summary: Dict[str, Any], out: Path, errors: List[str]
 
 def _engine_description(engine: str, summary: Dict[str, Any]) -> str:
     versions = summary.get("tools") if isinstance(summary.get("tools"), dict) else {}
-    names = ", ".join(f"{name} {versions[name]}" for name in ("betterleaks", "opengrep", "trivy") if versions.get(name))
+    names = ", ".join(
+        f"{name} {versions[name]}" for name in ("betterleaks", "opengrep", "trivy", "zizmor") if versions.get(name)
+    )
     where = f"scanner image {summary.get('version') or '?'}" if engine == "docker" else "tools on this machine"
     return f"{engine} ({where}{'; ' + names if names else ''})"
 

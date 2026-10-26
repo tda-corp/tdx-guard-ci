@@ -6,7 +6,7 @@ ci-templates/scanner/tdxguard-scan only sets the locale and calls this). The con
       [-v /var/run/docker.sock:/var/run/docker.sock] [-v <trivy-cache>:/cache] \\
       ghcr.io/tda-corp/tdxguard-scanner:v1 scan \\
       [--exclude <path>]... [--image <ref>=<slug>]... [--remote-image <ref>=<slug>]... \\
-      [--skip betterleaks|opengrep|trivy|image]... [--secrets-mode dir|git] [--log-opts <opts>]
+      [--skip betterleaks|opengrep|trivy|zizmor|image]... [--secrets-mode dir|git] [--log-opts <opts>]
 
 Exit status: 0 the scans ran (findings are not an error), 1 at least one scanner failed
 (listed in summary.json "errors"), 2 bad usage or an unusable /src or /out.
@@ -43,7 +43,7 @@ Options of `scan`:
                               Repeatable.
   --remote-image <ref>=<slug> the same for an image Trivy pulls from its registry
                               (--image-src remote); needs no Docker socket. Repeatable.
-  --skip <scanner>            betterleaks, opengrep, trivy or image. Repeatable.
+  --skip <scanner>            betterleaks, opengrep, trivy, zizmor or image. Repeatable.
   --secrets-mode dir|git      dir (default): the whole working tree;
                               git: the git history (CI scans only the new commits).
   --log-opts <git-log-opts>   with --secrets-mode git, limit the history the way CI does,
@@ -55,7 +55,7 @@ Mounts:
   /cache  Trivy's DB and checks cache; makes repeated scans fast (optional)
   /var/run/docker.sock   needed for --image with locally built images (optional)
 
-Reports in /out: betterleaks.json, opengrep.sarif, trivy.sarif, sbom.cdx.json,
+Reports in /out: betterleaks.json, opengrep.sarif, trivy.sarif, sbom.cdx.json, zizmor.sarif,
 sbom-image-<slug>.cdx.json, trivy-image-<slug>.sarif, summary.json.
 
 Exit status: 0 the scans ran (findings are not an error), 1 a scanner failed (see
@@ -123,7 +123,7 @@ def parse(argv: Sequence[str]) -> Tuple[Dict[str, object], bool]:
         elif name == "--skip":
             scanner = value(name)
             if scanner not in scan.SCANNERS:
-                raise UsageError(f"--skip expects betterleaks, opengrep, trivy or image, got: {scanner}")
+                raise UsageError(f"--skip expects betterleaks, opengrep, trivy, zizmor or image, got: {scanner}")
             skips.append(scanner)
         elif name == "--secrets-mode":
             mode = value(name)
