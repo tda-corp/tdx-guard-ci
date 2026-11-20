@@ -102,6 +102,20 @@ on:
         required: false
         type: boolean
         default: false
+      sast_diff_on_pull_requests:
+        description: >-
+          On a pull request, Opengrep scans only the files the pull request changes and
+          reports only the findings that are not already on the base branch
+          (--baseline-commit), instead of the whole tree. The whole-tree scan took 5 to 8
+          minutes on every pull request of a large repository, on a runner pool shared by
+          every project. The pull request's branch in TDxGuard, its summary and its gate then
+          show the SAST findings the pull request adds, which is what a pull request is
+          judged on; the whole tree is still scanned on every push to a branch (main
+          included) and on a schedule. When the base commit cannot be compared, the job
+          says so and scans the whole tree.
+        required: false
+        type: boolean
+        default: true
       dockerfile:
         description: >-
           Dockerfile to build and scan, e.g. docker/backend/Dockerfile. The image is built into a
@@ -2054,7 +2068,11 @@ jobs:
       # Trivy's job, not Opengrep's.
       OPENGREP_RULE_LANGUAGES: "python javascript typescript go generic php java kotlin scala ruby csharp c"
     steps:
+      # Depth 2: on a pull request the checkout is the merge commit, and its first parent,
+      # the base branch, is what --baseline-commit compares against (see the scan below).
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
       # The helper scripts from the tools job, unpacked outside the checkout so that they are
       # neither scanned as part of the product nor mistaken for its files.
       - name: Unpack the helper scripts
@@ -2184,15 +2202,40 @@ jobs:
       #
       # Secrets are not lost with them: Betterleaks reads every file type, including
       # markdown, and does it against new commits where a leak actually matters.
+      # On a pull request (sast_diff_on_pull_requests), only the files the pull request
+      # changes are scanned, and a finding already present on the base branch is left out.
+      # HEAD is the merge commit, so HEAD^1 is the base branch as GitHub merged it.
+      #
+      # A baseline run that fails exits 2 and still writes a SARIF file with no results in
+      # it, which the `|| true` of the whole-tree scan would have turned into a clean scan.
+      # So its exit code is checked, and on a failure the whole tree is scanned instead.
       - name: Scan the source code (SAST)
+        env:
+          DIFF_ON_PULL_REQUESTS: ${{ inputs.sast_diff_on_pull_requests }}
         run: |
-          ./opengrep scan --sarif --output opengrep.sarif --quiet \
-            --config ogrules-security \
-            --exclude=node_modules --exclude=bower_components --exclude=vendor \
-            --exclude=Pods --exclude=Carthage --exclude=.venv \
-            --exclude=dist --exclude=build \
-            --exclude='*.md' --exclude='*.example' \
-            --exclude=ogrules --exclude=ogrules-security . || true
+          og_scan() {
+            ./opengrep scan --sarif --output opengrep.sarif --quiet \
+              --config ogrules-security \
+              --exclude=node_modules --exclude=bower_components --exclude=vendor \
+              --exclude=Pods --exclude=Carthage --exclude=.venv \
+              --exclude=dist --exclude=build \
+              --exclude='*.md' --exclude='*.example' \
+              --exclude=ogrules --exclude=ogrules-security "$@" .
+          }
+          BASELINE=""
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ] && [ "$DIFF_ON_PULL_REQUESTS" = "true" ]; then
+            BASELINE=$(git rev-parse --verify -q 'HEAD^1' || true)
+          fi
+          if [ -n "$BASELINE" ]; then
+            if og_scan --baseline-commit "$BASELINE"; then
+              echo "Scanned the files this pull request changes; findings already on $BASELINE are left out."
+              echo "OPENGREP_SCOPE=pull-request" >> "$GITHUB_ENV"
+              exit 0
+            fi
+            echo "::warning::Opengrep could not compare with the base branch ($BASELINE); scanning the whole tree instead."
+            rm -f opengrep.sarif
+          fi
+          og_scan || true
       # SecObserve uses the rule id as the finding title, and Opengrep's id carries the
       # --config path ("ogrules.python.<rule>"). --rule-roots trims it to "python.<rule>", and
       # TDxGuard's own rules to "tdxguard-rules.<rule>".
@@ -2212,7 +2255,9 @@ jobs:
           # parser_name is stated explicitly: several parsers accept a SARIF file, and they
           # are tried in alphabetical order.
           tg_push opengrep.sarif "parser_name=SARIF"
-          tg_row "Opengrep (SAST)" opengrep.sarif "$TG_SARIF_ALL" "$TG_OPENGREP_ERR"
+          LABEL="Opengrep (SAST)"
+          [ "${OPENGREP_SCOPE:-}" = "pull-request" ] && LABEL="Opengrep (SAST, new in this pull request)"
+          tg_row "$LABEL" opengrep.sarif "$TG_SARIF_ALL" "$TG_OPENGREP_ERR"
           tg_finish
       # Inline annotations on the pull request diff and the Security tab.
       - uses: github/codeql-action/upload-sarif@v4
