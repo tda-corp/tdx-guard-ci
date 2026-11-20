@@ -1709,6 +1709,19 @@ jobs:
           TG_MOBSF_ALL='[.appsec.high[]?, .appsec.warning[]?] | length'
           TG_MOBSF_SEV='[.appsec.high[]?] | length'
 
+          # Trivy's own JSON report (--format json), from which the gates count and the uploaded
+          # reports are converted, so that nothing is scanned twice.
+          #
+          # The fixable CRITICAL/HIGH vulnerabilities, by the one severity Trivy chose: exactly what
+          # `--severity CRITICAL,HIGH --ignore-unfixed` reports. A filter, not a count: the gates
+          # list them as well. Not to be read off the CycloneDX file, whose ratings carry every
+          # vendor's severity side by side (30 "high or critical" where Trivy reports 24).
+          TG_TRIVY_FIXABLE='[.Results[]?.Vulnerabilities[]? | select((.Severity == "CRITICAL" or .Severity == "HIGH") and .Status == "fixed")]'
+          # One half of a vuln+secret report each, for `trivy convert`: SARIF would otherwise list
+          # every CVE a second time next to the secrets.
+          TG_TRIVY_VULNS='del(.Results[]?.Secrets)'
+          TG_TRIVY_SECRETS='.Results |= (. // [] | map(del(.Vulnerabilities, .Packages)))'
+
           TG_FAILED=0
           TG_ROWS=""
 
@@ -1988,7 +2001,7 @@ jobs:
       # Each job pushes its own reports; see tdxguard-lib.sh for why there are no artifacts.
       - name: Push the results to TDxGuard
         id: push
-        if: always()
+        if: ${{ !cancelled() }}
         env:
           PRODUCT: ${{ inputs.product }}
           BAO_ADDR: ${{ inputs.bao_addr }}
@@ -2189,7 +2202,7 @@ jobs:
           python3 "$TG/sarif-enrich.py" opengrep.sarif . --rule-roots "${OPENGREP_RULE_LANGUAGES// /,},tdxguard-rules" --context 5 --expand-context
       - name: Push the results to TDxGuard
         id: push
-        if: always()
+        if: ${{ !cancelled() }}
         env:
           PRODUCT: ${{ inputs.product }}
           BAO_ADDR: ${{ inputs.bao_addr }}
@@ -2203,21 +2216,25 @@ jobs:
           tg_finish
       # Inline annotations on the pull request diff and the Security tab.
       - uses: github/codeql-action/upload-sarif@v4
-        if: always() && inputs.code_scanning && hashFiles('opengrep.sarif') != ''
+        if: ${{ !cancelled() && inputs.code_scanning && hashFiles('opengrep.sarif') != '' }}
         continue-on-error: true
         with: { sarif_file: opengrep.sarif, category: tdxguard-opengrep }
 
+      # Counted in the SARIF the scan already wrote, the same count as the summary's severe
+      # column, instead of running the whole ruleset over the tree a second time.
       - name: Fail on ERROR severity findings
         if: inputs.fail_on_critical
         run: |
-          ./opengrep scan --error --severity=ERROR --quiet \
-            --config ogrules-security \
-            --exclude=node_modules --exclude=bower_components --exclude=vendor \
-            --exclude=Pods --exclude=Carthage --exclude=.venv \
-            --exclude=dist --exclude=build \
-            --exclude='*.md' --exclude='*.example' \
-            --exclude=ogrules --exclude=ogrules-security . \
-            || { echo "::error::Opengrep: ERROR severity findings present."; exit 1; }
+          . "$TG/tdxguard-lib.sh"
+          if [ ! -s opengrep.sarif ]; then
+            echo "::error::Opengrep wrote no report; the gate cannot tell a clean scan from a failed one."
+            exit 1
+          fi
+          COUNT=$(jq "$TG_OPENGREP_ERR" opengrep.sarif)
+          if [ "$COUNT" -ne 0 ]; then
+            echo "::error::Opengrep: $COUNT ERROR severity findings present."
+            exit 1
+          fi
 
   trivy:
     runs-on: ${{ inputs.runs_on }}
@@ -2329,11 +2346,16 @@ jobs:
       # replaces what used to be two paths (a separate SBOM plus an OSV scan for the CVEs).
       # Dropping "--scanners vuln" silently turns the vulnerability scan off — Trivy warns
       # about it, but still writes a perfectly valid file.
+      #
+      # Written as Trivy's own JSON first and converted: the gate counts in that JSON (see
+      # TG_TRIVY_FIXABLE) instead of scanning the tree a third time. --list-all-pkgs keeps
+      # the components without a CVE, which the SBOM is made of.
       - name: Generate the SBOM including vulnerabilities
         run: |
-          trivy fs . --format cyclonedx --scanners vuln --output sbom.cdx.json \
+          trivy fs . --format json --list-all-pkgs --scanners vuln --output trivy-fs.json \
             --skip-dirs '**/node_modules' --skip-dirs '**/bower_components' --skip-dirs '**/vendor' \
             --skip-dirs '**/Pods' --skip-dirs '**/Carthage' --skip-dirs .venv
+          trivy convert --format cyclonedx --output sbom.cdx.json trivy-fs.json
       # Trivy reports line numbers but no code snippet, so the enrich step embeds one.
       #
       # --unescape-html is kept for the older-Trivy case only: 0.58.x rendered its SARIF
@@ -2397,7 +2419,7 @@ jobs:
           fi
       - name: Push the results to TDxGuard
         id: push
-        if: always()
+        if: ${{ !cancelled() }}
         env:
           PRODUCT: ${{ inputs.product }}
           BAO_ADDR: ${{ inputs.bao_addr }}
@@ -2419,17 +2441,28 @@ jobs:
       # Inline annotations on the pull request diff and the Security tab. The findings
       # already travel to TDxGuard; this only puts them where the developer is looking.
       - uses: github/codeql-action/upload-sarif@v4
-        if: always() && inputs.code_scanning && hashFiles('trivy.sarif') != ''
+        if: ${{ !cancelled() && inputs.code_scanning && hashFiles('trivy.sarif') != '' }}
         continue-on-error: true
         with: { sarif_file: trivy.sarif, category: tdxguard-trivy }
 
+      # Counted in the reports the scans already wrote, with the same directories skipped, so
+      # the gate cannot fail on a finding that never reaches TDxGuard. Trivy's SARIF marks a
+      # CRITICAL or HIGH misconfiguration as level "error" and nothing else.
       - name: Fail on fixable CRITICAL/HIGH vulnerabilities
         if: inputs.fail_on_critical
         run: |
-          trivy fs . --scanners vuln,misconfig --severity CRITICAL,HIGH \
-            --ignore-unfixed --exit-code 1 \
-            --skip-dirs '**/node_modules' --skip-dirs '**/bower_components' --skip-dirs '**/vendor' \
-            --skip-dirs '**/Pods' --skip-dirs '**/Carthage' --skip-dirs .venv
+          . "$TG/tdxguard-lib.sh"
+          VULNS=$(jq "$TG_TRIVY_FIXABLE | length" trivy-fs.json)
+          MISCONFIGS=$(jq "$TG_SARIF_ERR" trivy.sarif)
+          if [ "$VULNS" -ne 0 ]; then
+            echo "::error::$VULNS fixable CRITICAL/HIGH vulnerabilities in the dependencies. Details in TDxGuard."
+            jq -r "$TG_TRIVY_FIXABLE | .[] | \"  \(.Severity) \(.VulnerabilityID) \(.PkgName) \(.InstalledVersion) -> \(.FixedVersion)\"" \
+              trivy-fs.json
+          fi
+          if [ "$MISCONFIGS" -ne 0 ]; then
+            echo "::error::$MISCONFIGS CRITICAL/HIGH misconfigurations. Details in TDxGuard."
+          fi
+          [ "$VULNS" -eq 0 ] && [ "$MISCONFIGS" -eq 0 ]
 
   # Scan the built image — the OS packages and libraries that live INSIDE it, which
   # `trivy fs .` on the source tree never sees: a stale base image, apt/apk packages
@@ -2583,15 +2616,28 @@ jobs:
       # (the base image's OS packages, which `trivy fs .` on the source tree never sees),
       # the SARIF carries secrets baked into the layers — an .env or a private key copied
       # in during the build and not deleted.
+      #
+      # Both come out of ONE Trivy run, written as Trivy's own JSON and then converted. Two
+      # runs (vuln, then secret) read the image twice: Trivy exports it out of the Docker
+      # daemon and unpacks every layer each time, and its layer cache is keyed on the
+      # scanners, so the second run reused nothing. On tdx-scribe's application image
+      # (Ubuntu, Chrome, ffmpeg, a thousand packages) that was 4-7 minutes for each run. The
+      # JSON also feeds the gate below, which used to scan the image a third time.
+      #
+      # --list-all-pkgs keeps the components without a CVE, which the SBOM is made of. Each
+      # conversion gets only its own half of the report (see TG_TRIVY_VULNS).
       - name: Scan the images
         run: |
+          . "$TG/tdxguard-lib.sh"
           while IFS="$(printf '\t')" read -r REF SLUG; do
             [ -n "$REF" ] || continue
             echo "::group::$REF"
-            trivy image --format cyclonedx --scanners vuln \
-              --output "sbom-image-$SLUG.cdx.json" "$REF"
-            trivy image --scanners secret --format sarif \
-              --output "trivy-image-$SLUG.sarif" "$REF"
+            trivy image --scanners vuln,secret --format json --list-all-pkgs \
+              --output "trivy-image-$SLUG.json" "$REF"
+            jq "$TG_TRIVY_VULNS" "trivy-image-$SLUG.json" > "$RUNNER_TEMP/trivy-vulns.json"
+            trivy convert --format cyclonedx --output "sbom-image-$SLUG.cdx.json" "$RUNNER_TEMP/trivy-vulns.json"
+            jq "$TG_TRIVY_SECRETS" "trivy-image-$SLUG.json" > "$RUNNER_TEMP/trivy-secrets.json"
+            trivy convert --format sarif --output "trivy-image-$SLUG.sarif" "$RUNNER_TEMP/trivy-secrets.json"
             echo "::endgroup::"
           done < images.txt
 
@@ -2600,7 +2646,7 @@ jobs:
       # registry reference to claim.
       - name: Push the results to TDxGuard
         id: push
-        if: always()
+        if: ${{ !cancelled() }}
         env:
           PRODUCT: ${{ inputs.product }}
           BAO_ADDR: ${{ inputs.bao_addr }}
@@ -2623,14 +2669,23 @@ jobs:
           fi
           tg_finish
 
+      # Counted in the report the scan already wrote, not by scanning the image again.
       - name: Fail on fixable CRITICAL/HIGH vulnerabilities in the image
         if: inputs.fail_on_critical
         run: |
-          while IFS="$(printf '\t')" read -r REF _; do
+          . "$TG/tdxguard-lib.sh"
+          FAILED=0
+          while IFS="$(printf '\t')" read -r REF SLUG; do
             [ -n "$REF" ] || continue
-            trivy image --scanners vuln --severity CRITICAL,HIGH \
-              --ignore-unfixed --exit-code 1 "$REF"
+            COUNT=$(jq "$TG_TRIVY_FIXABLE | length" "trivy-image-$SLUG.json")
+            if [ "$COUNT" -ne 0 ]; then
+              echo "::error::$REF: $COUNT fixable CRITICAL/HIGH vulnerabilities. Details in TDxGuard."
+              jq -r "$TG_TRIVY_FIXABLE | .[] | \"  \(.Severity) \(.VulnerabilityID) \(.PkgName) \(.InstalledVersion) -> \(.FixedVersion)\"" \
+                "trivy-image-$SLUG.json"
+              FAILED=1
+            fi
           done < images.txt
+          exit "$FAILED"
 
       # Remove what this job built, whatever happened above — hence always(), so a failing
       # gate does not also leak an image.
@@ -2897,7 +2952,7 @@ jobs:
 
       - name: Push the results to TDxGuard
         id: push
-        if: always()
+        if: ${{ !cancelled() }}
         env:
           PRODUCT: ${{ inputs.product }}
           BAO_ADDR: ${{ inputs.bao_addr }}
@@ -2916,7 +2971,7 @@ jobs:
           tg_finish
 
       - uses: github/codeql-action/upload-sarif@v4
-        if: always() && inputs.code_scanning && hashFiles('nuclei.sarif') != ''
+        if: ${{ !cancelled() && inputs.code_scanning && hashFiles('nuclei.sarif') != '' }}
         continue-on-error: true
         with: { sarif_file: nuclei.sarif, category: tdxguard-nuclei }
 
@@ -3008,7 +3063,7 @@ jobs:
 
       - name: Push the results to TDxGuard
         id: push
-        if: always()
+        if: ${{ !cancelled() }}
         env:
           PRODUCT: ${{ inputs.product }}
           BAO_ADDR: ${{ inputs.bao_addr }}
@@ -3025,7 +3080,16 @@ jobs:
   publish:
     runs-on: ${{ inputs.runs_on }}
     needs: [betterleaks, opengrep, trivy, image_scan, runtime, mobile]
-    if: always()          # summarize and comment even when a scan's gate failed
+    # Summarize and comment even when a scan's gate failed — but not when the run was
+    # cancelled. always() also holds through a cancellation, so a run superseded by a newer
+    # push left this job queued for a runner after every other job had been cancelled. The
+    # run stayed "queued" for hours, and since it still held its concurrency group, the
+    # newer run of the same pull request waited behind it as "pending": on 20 November 2026,
+    # 8 of the 14 open tdxguard runs in tdx-scribe were cancelled runs waiting for this job.
+    # The push and summary steps of every job use !cancelled() for the same reason: a
+    # cancelled run stops instead of spending minutes uploading results nobody will read.
+    # Clean-up steps (images built, the MobSF container) keep always().
+    if: ${{ !cancelled() }}
     steps:
       - name: Check the runner has what this job needs
         run: |
@@ -3075,7 +3139,7 @@ jobs:
       # the job summary always, and as ONE sticky comment on a pull request (updated in
       # place on every run, never a new comment each time).
       - name: Summarize the results on the pull request
-        if: always()
+        if: ${{ !cancelled() }}
         env:
           PRODUCT: ${{ inputs.product }}
           GH_TOKEN: ${{ github.token }}
